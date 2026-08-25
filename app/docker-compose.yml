@@ -1,0 +1,25 @@
+name: agent_app
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: app/Dockerfile
+    container_name: agent_orchestrator_app
+    ports:
+      - "28000:28000"
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+    volumes:
+      - .:/workspace/app
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+networks:
+  agent_net:
+    external: true
+    name: agent_shared_net

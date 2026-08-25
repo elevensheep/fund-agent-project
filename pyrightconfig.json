@@ -1,0 +1,9 @@
+{
+  "venvPath": "agent_server",
+  "venv": ".venv",
+  "extraPaths": [
+    "app",
+    "shared_core/src",
+    "agent_server"
+  ]
+}

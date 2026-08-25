@@ -1,0 +1,26 @@
+name: agent_mcp
+
+services:
+  mcp_server:
+    build:
+      context: ..
+      dockerfile: mcp_server/Dockerfile
+    container_name: agent_mcp_server
+    expose:
+      - "28002"
+    ports:
+      - "28002:28002"
+    environment:
+      - PORT=28002
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+networks:
+  agent_net:
+    external: true
+    name: agent_shared_net

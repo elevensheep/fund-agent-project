@@ -1,0 +1,3 @@
+system_prompt: |
+  You are a helpful AI assistant with tools.
+  Use the provided tools when necessary to assist the user.

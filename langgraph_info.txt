@@ -1,0 +1,5 @@
+Name: langgraph
+Version: 1.2.11
+Location: /opt/venv/lib/python3.12/site-packages
+Requires: langchain-core, langgraph-checkpoint, langgraph-prebuilt, langgraph-sdk, pydantic, xxhash
+Required-by: a2a-server, langchain

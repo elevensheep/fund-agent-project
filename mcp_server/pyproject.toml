@@ -1,0 +1,17 @@
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "elevensheep", email = "fttc100@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]<2.0.0",
+    "shared-core",
+]
+
+[tool.uv.sources]
+shared-core = { path = "../shared_core" }

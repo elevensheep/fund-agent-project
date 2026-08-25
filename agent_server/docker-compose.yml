@@ -1,0 +1,47 @@
+name: agent_servers
+
+services:
+  echo_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_echo_server
+    ports:
+      - "28001:28001"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.echo_agent
+      - AGENT_PORT=28001
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  langchain_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_langchain_server
+    ports:
+      - "28003:28003"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.langchain_agent
+      - AGENT_PORT=28003
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+networks:
+  agent_net:
+    external: true
+    name: agent_shared_net
