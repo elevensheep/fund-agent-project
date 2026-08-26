@@ -28,12 +28,14 @@ import { WebSearchCard } from "@/components/insights/WebSearchCard";
 // Report & Monitoring
 import { ReportViewer } from "@/components/report/ReportViewer";
 import { GrafanaEmbed } from "@/components/monitoring/GrafanaEmbed";
+import { useAgentStream } from "@/hooks/useAgentStream";
 import { ArrowUpRight, CheckCircle2, Shield, Sparkles, TrendingUp, Zap } from "lucide-react";
 
 export default function DashboardPage() {
   const {
     ticker,
     stockName,
+    query,
     plan,
     currentStepId,
     completedAgents,
@@ -42,6 +44,16 @@ export default function DashboardPage() {
     isAnalyzing,
     activeTab,
   } = useAgentStore();
+
+  const { startAnalysis } = useAgentStream();
+  const initialFetchDone = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!initialFetchDone.current) {
+      initialFetchDone.current = true;
+      startAnalysis(query);
+    }
+  }, [startAnalysis, query]);
 
   const quote = useStockPrice(ticker);
 
