@@ -8,26 +8,31 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
+from core.mcp_client import discover_agents_via_mcp, fetch_all_agent_cards
 from shared_core.logger import logger
 from shared_core.prompt import load_prompt
-from core.mcp_client import fetch_all_agent_cards, discover_agents_via_mcp
 from .base import BaseAgent
+from .dispatcher import ParallelDispatcher
+from .planner import ExecutionPlan, PlannerAgent
+from .synthesizer import SynthesizerAgent
 
 
 class SupervisorAgent(BaseAgent):
     """
-    A2A Client Supervisor Agent.
-    Client 서버의 단일 Supervisor로서 사용자 요청을 받아,
-    필요시 등록된 Remote A2A Agent에 작업을 위임하고 결과를 종합하여 응답합니다.
+    Plan-and-Execute 아키텍처 기반 중앙 Supervisor 오케스트레이터 에이전트.
+    Planner ➡️ Parallel Dispatcher ➡️ Synthesizer 3단계 파이프라인으로
+    8대 금융 전문 서브 에이전트를 조율합니다.
     """
-
 
     def __init__(
         self,
         llm: BaseChatModel,
         remote_agents: Optional[Dict[str, str]] = None,
         http_client: Optional[httpx.AsyncClient] = None,
-        mcp_server_url: str = "http://localhost:28002",
+        mcp_server_url: str = "http://agent_mcp_server:28002",
+        planner: Optional[PlannerAgent] = None,
+        dispatcher: Optional[ParallelDispatcher] = None,
+        synthesizer: Optional[SynthesizerAgent] = None,
     ) -> None:
         super().__init__()
         self.llm = llm
@@ -36,6 +41,14 @@ class SupervisorAgent(BaseAgent):
         self.mcp_server_url = mcp_server_url
         self.agent_cards = {}
         self._cards_fetched = False
+
+        # Plan-and-Execute 구성요소 초기화
+        self.planner = planner or PlannerAgent(llm=self.llm)
+        self.dispatcher = dispatcher or ParallelDispatcher(
+            agent_endpoints=self.remote_agents,
+            http_client=self.http_client,
+        )
+        self.synthesizer = synthesizer or SynthesizerAgent(llm=self.llm)
 
     @property
     def name(self) -> str:
@@ -56,7 +69,7 @@ class SupervisorAgent(BaseAgent):
                 else:
                     info_lines.append(f"- Agent '{name}' at {url}")
             agent_info = "\n".join(info_lines)
-            
+
         return system_prompt.format(agent_info=agent_info)
 
     def _build_tools(self) -> List[Any]:
@@ -81,104 +94,10 @@ class SupervisorAgent(BaseAgent):
 
     async def call_remote_agent(self, agent_name: str, message: str) -> str:
         """Remote A2A Agent 호출 (공식 Google ADK A2A JSON-RPC 2.0 Protocol)"""
-        if agent_name not in self.remote_agents:
-            return f"Error: Remote agent '{agent_name}' is not registered."
-
-        url = self.remote_agents[agent_name]
-        msg_id = f"msg-{uuid.uuid4().hex[:8]}"
-        logger.info("task.supervisor.call_remote_agent", target_agent=agent_name, url=url, message=message, msg_id=msg_id)
-
-        # 1. A2A JSON-RPC 2.0 규격 호출 (SendMessage, a2a-version: 1.0)
-        jsonrpc_payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "SendMessage",
-            "params": {
-                "message": {
-                    "message_id": msg_id,
-                    "role": "ROLE_USER",
-                    "parts": [{"text": message}],
-                }
-            },
-        }
-
-        try:
-            resp = await self.http_client.post(
-                url,
-                json=jsonrpc_payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "a2a-version": "1.0",
-                },
-                timeout=30.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if "result" in data:
-                    res_val = data["result"]
-                    if isinstance(res_val, dict):
-                        task = res_val.get("task", {}) if isinstance(res_val, dict) else {}
-                        status_msg = (
-                            task.get("status", {}).get("message", {})
-                            if isinstance(task.get("status"), dict)
-                            else {}
-                        )
-                        history = task.get("history", []) if isinstance(task, dict) else []
-                        last_history_msg = (
-                            history[-1] if history and isinstance(history[-1], dict) else {}
-                        )
-
-                        msg = status_msg or last_history_msg or (
-                            res_val.get("message", {}) if isinstance(res_val, dict) else {}
-                        )
-                        parts = msg.get("parts", []) if isinstance(msg, dict) else []
-                        texts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
-                        if texts:
-                            return "".join(texts)
-                        return json.dumps(res_val, ensure_ascii=False)
-                    return str(res_val)
-                elif "error" in data:
-                    logger.warning("supervisor.jsonrpc_error", agent=agent_name, error=data["error"])
-        except Exception as e:
-            logger.warning("supervisor.jsonrpc_call_failed", agent=agent_name, error=str(e))
-
-        # 2. REST Direct Fallback
-        endpoints_to_try = [
-            f"{url.rstrip('/')}/v1/message",
-            f"{url.rstrip('/')}/invoke",
-        ]
-
-        for endpoint in endpoints_to_try:
-            try:
-                payloads = [
-                    {"message": message},
-                    {"text": message},
-                ]
-                for payload in payloads:
-                    resp = await self.http_client.post(
-                        endpoint,
-                        json=payload,
-                        headers={"Content-Type": "application/json"},
-                        timeout=30.0,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if isinstance(data, dict) and "jsonrpc" not in data:
-                            res_str = (
-                                data.get("output")
-                                or data.get("content")
-                                or data.get("text")
-                                or data.get("result")
-                            )
-                            if res_str:
-                                return str(res_str)
-                            return json.dumps(data, ensure_ascii=False)
-                        elif isinstance(data, str):
-                            return data
-            except Exception:
-                continue
-
-        return f"Failed to communicate with remote agent '{agent_name}' at {url}"
+        from .planner import PlanStep
+        step = PlanStep(step_id=1, agent_name=agent_name, task_prompt=message)
+        res = await self.dispatcher.call_agent(step)
+        return res.get("output", "")
 
     def _format_content(self, content: Any) -> str:
         if isinstance(content, str):
@@ -196,6 +115,7 @@ class SupervisorAgent(BaseAgent):
         return str(content)
 
     async def _ensure_agent_cards(self):
+        """MCP 서버를 통해 서브 에이전트 목록 및 Agent Card 동적 탐색"""
         if not self._cards_fetched:
             discovered_agents, discovered_cards = await discover_agents_via_mcp(self.mcp_server_url)
             if discovered_agents:
@@ -203,125 +123,58 @@ class SupervisorAgent(BaseAgent):
                 self.agent_cards = discovered_cards
             else:
                 self.agent_cards = await fetch_all_agent_cards(self.mcp_server_url, self.remote_agents)
+            
+            # Dispatcher 엔드포인트 동기화
+            self.dispatcher.set_endpoints(self.remote_agents)
             self._cards_fetched = True
             logger.info("artifact.supervisor.agent_cards_loaded", cards=self.agent_cards, remote_agents=self.remote_agents)
 
     async def ainvoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """
-        Supervisor 비동기 실행.
-        inputs: {"message": str, ...}
+        Supervisor Plan-and-Execute 메인 실행 파이프라인.
+        1. Planner: 질의 분석 및 ExecutionPlan 수립
+        2. Parallel Dispatcher: 단계별 병렬 A2A 호출
+        3. Synthesizer: 종합 리포트 생성
         """
         await self._ensure_agent_cards()
-        
+
         user_message = inputs.get("message", "")
-        logger.info("task.supervisor.start", message=user_message)
+        logger.info("task.supervisor.plan_and_execute.start", message=user_message)
 
-        tools = self._build_tools()
-        if tools and hasattr(self.llm, "bind_tools"):
-            try:
-                llm_with_tools = self.llm.bind_tools(tools)
-            except NotImplementedError:
-                llm_with_tools = self.llm
-        else:
-            llm_with_tools = self.llm
+        # 1. 실행 계획(DAG) 수립
+        plan: ExecutionPlan = await self.planner.create_plan(user_message)
+        logger.info("task.supervisor.plan_created", ticker=plan.ticker, intent=plan.query_intent, steps=len(plan.steps))
 
-        messages: List[BaseMessage] = [
-            SystemMessage(content=self._get_system_prompt()),
-            HumanMessage(content=user_message),
-        ]
+        # 2. 병렬 디스패치 실행
+        dispatch_res = await self.dispatcher.execute_plan(plan)
+        used_agents = dispatch_res.get("used_agents", [])
+        sub_results = dispatch_res.get("sub_agent_results", {})
 
-        response = await llm_with_tools.ainvoke(messages)
+        # 3. 결과 종합 및 최종 리포트 작성
+        final_report = await self.synthesizer.synthesize(
+            ticker=plan.ticker,
+            intent=plan.query_intent,
+            sub_agent_results=sub_results,
+            user_query=user_message,
+        )
 
-        used_agents = []
-        remote_responses = []
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            messages.append(response)
-            for tool_call in response.tool_calls:
-                fn_name = tool_call.get("name", "")
-                args = tool_call.get("args", {})
-                msg_to_send = args.get("msg") or args.get("message") or user_message
+        logger.info("task.supervisor.plan_and_execute.completed", used_agents=used_agents, output_len=len(final_report))
+        logger.info("artifact.supervisor.output_created", output=final_report, used_agents=used_agents)
 
-                target_agent = fn_name.replace("delegate_to_", "")
-                logger.info("task.supervisor.execute_remote_tool", tool=fn_name, target_agent=target_agent, message=msg_to_send)
-                if target_agent in self.remote_agents:
-                    used_agents.append(target_agent)
-                    agent_res = await self.call_remote_agent(target_agent, msg_to_send)
-                    remote_responses.append(agent_res)
-                    messages.append(
-                        HumanMessage(
-                            content=f"Remote agent '{target_agent}' returned: {agent_res}."
-                        )
-                    )
-
-            if used_agents:
-                messages.append(
-                    HumanMessage(
-                        content="Synthesize all remote agent responses and provide a helpful final response to the user."
-                    )
-                )
-                final_response = await self.llm.ainvoke(messages)
-                formatted_output = self._format_content(final_response.content)
-                logger.info("task.supervisor.completed", output=formatted_output, used_agents=used_agents)
-                logger.info("artifact.supervisor.output_created", output=formatted_output, used_agents=used_agents)
-                return {
-                    "output": formatted_output,
-                    "used_agents": used_agents,
-                    "remote_response": "\n".join(remote_responses),
-                }
-
-        formatted_output = self._format_content(response.content)
-        logger.info("task.supervisor.completed", output=formatted_output, used_agents=used_agents)
-        logger.info("artifact.supervisor.output_created", output=formatted_output, used_agents=used_agents)
         return {
-            "output": formatted_output,
+            "output": final_report,
             "used_agents": used_agents,
+            "plan": plan.model_dump(),
+            "remote_response": json.dumps(sub_results, ensure_ascii=False),
         }
 
     async def astream(self, inputs: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        """Supervisor 토큰 비동기 스트리밍 (Remote Agent Tool Call 연동)"""
-        await self._ensure_agent_cards()
+        """Supervisor 최종 리포트 토큰 비동기 스트리밍"""
+        result = await self.ainvoke(inputs)
+        output_text = result.get("output", "")
         
-        user_message = inputs.get("message", "")
-        logger.info("supervisor.astream.start", message=user_message)
-
-        tools = self._build_tools()
-        if tools and hasattr(self.llm, "bind_tools"):
-            try:
-                llm_with_tools = self.llm.bind_tools(tools)
-            except NotImplementedError:
-                llm_with_tools = self.llm
-        else:
-            llm_with_tools = self.llm
-
-        messages: List[BaseMessage] = [
-            SystemMessage(content=self._get_system_prompt()),
-            HumanMessage(content=user_message),
-        ]
-
-        response = await llm_with_tools.ainvoke(messages)
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            messages.append(response)
-            for tool_call in response.tool_calls:
-                fn_name = tool_call.get("name", "")
-                args = tool_call.get("args", {})
-                msg_to_send = args.get("msg") or args.get("message") or user_message
-                target_agent = fn_name.replace("delegate_to_", "")
-                
-                logger.info("supervisor.execute_remote_tool", tool=fn_name, target_agent=target_agent, args=args)
-                
-                if target_agent in self.remote_agents:
-                    agent_res = await self.call_remote_agent(target_agent, msg_to_send)
-                    messages.append(
-                        HumanMessage(
-                            content=f"Remote agent '{target_agent}' returned: {agent_res}."
-                        )
-                    )
-            messages.append(
-                HumanMessage(
-                    content="Synthesize all remote agent responses and provide a helpful final response to the user."
-                )
-            )
-            async for chunk in self.llm.astream(messages):
-                yield {"token": self._format_content(chunk.content)}
-        else:
-            yield {"token": self._format_content(response.content)}
+        # Word/chunk streaming
+        words = output_text.split(" ")
+        for i, word in enumerate(words):
+            token = word if i == len(words) - 1 else word + " "
+            yield {"token": token}

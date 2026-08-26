@@ -1,11 +1,26 @@
 name: agent_servers
 
 services:
-  echo_agent_server:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=agent_stock_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres_secure_pw
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - agent_net
+
+  data_processing_agent_server:
     build:
       context: ..
       dockerfile: agent_server/Dockerfile
-    container_name: agent_echo_server
+    container_name: agent_data_processing_server
     ports:
       - "28001:28001"
     volumes:
@@ -14,18 +29,21 @@ services:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
       - PYTHONUTF8=1
-      - AGENT_MODULE=agents.echo_agent
+      - AGENT_MODULE=agents.data_processing_agent
       - AGENT_PORT=28001
+      - POSTGRES_HOST=agent_postgres
     env_file:
       - ../.env
+    depends_on:
+      - postgres
     networks:
       - agent_net
 
-  langchain_agent_server:
+  web_search_agent_server:
     build:
       context: ..
       dockerfile: agent_server/Dockerfile
-    container_name: agent_langchain_server
+    container_name: agent_web_search_server
     ports:
       - "28003:28003"
     volumes:
@@ -34,12 +52,158 @@ services:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
       - PYTHONUTF8=1
-      - AGENT_MODULE=agents.langchain_agent
+      - AGENT_MODULE=agents.web_search_agent
       - AGENT_PORT=28003
     env_file:
       - ../.env
     networks:
       - agent_net
+
+  fundamental_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_fundamental_server
+    ports:
+      - "28004:28004"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.fundamental_agent
+      - AGENT_PORT=28004
+      - POSTGRES_HOST=agent_postgres
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  technical_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_technical_server
+    ports:
+      - "28005:28005"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.technical_agent
+      - AGENT_PORT=28005
+      - POSTGRES_HOST=agent_postgres
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  dart_disclosure_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_dart_disclosure_server
+    ports:
+      - "28006:28006"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.dart_disclosure_agent
+      - AGENT_PORT=28006
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  macro_sector_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_macro_sector_server
+    ports:
+      - "28007:28007"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.macro_sector_agent
+      - AGENT_PORT=28007
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  bull_bear_debate_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_bull_bear_debate_server
+    ports:
+      - "28008:28008"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.bull_bear_debate_agent
+      - AGENT_PORT=28008
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  risk_management_agent_server:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_risk_management_server
+    ports:
+      - "28009:28009"
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - AGENT_MODULE=agents.risk_management_agent
+      - AGENT_PORT=28009
+    env_file:
+      - ../.env
+    networks:
+      - agent_net
+
+  stream_worker:
+    build:
+      context: ..
+      dockerfile: agent_server/Dockerfile
+    container_name: agent_stream_worker
+    restart: always
+    command: ["sh", "-c", "uv run python -m workers.stream_worker"]
+    volumes:
+      - .:/workspace/agent_server
+    environment:
+      - ENVIRONMENT=production
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - POSTGRES_HOST=agent_postgres
+    env_file:
+      - ../.env
+    depends_on:
+      - postgres
+    networks:
+      - agent_net
+
+volumes:
+  postgres_data:
 
 networks:
   agent_net:

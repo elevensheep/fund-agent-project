@@ -7,7 +7,7 @@
 ## 1. 개요
 
 `mcp_server`는 Anthropic의 **Model Context Protocol (MCP)** 표준에 따라 구축된 FastMCP SSE(Server-Sent Events) 서버입니다.
-네트워크상에 등록된 분산 서브 에이전트들의 정보(Agent Card)를 프로빙(Probing)하여, 중앙 Supervisor가 동적으로 사용 가능한 에이전트를 탐색하고 호출할 수 있는 메커니즘을 제공합니다.
+네트워크상에 등록된 분산 8대 서브 에이전트들의 정보(Agent Card)를 프로빙(Probing)하여, 중앙 Supervisor가 동적으로 사용 가능한 에이전트를 탐색하고 호출할 수 있는 메커니즘을 제공합니다.
 
 ---
 
@@ -31,21 +31,37 @@ mcp_server/
 ### 3.1. `list_agent_cards`
 - **도구 명**: `list_agent_cards`
 - **설명**: 네트워크에 존재하는 서브 에이전트들의 HTTP URL 엔드포인트를 순회하며 `/.well-known/agent-card.json`을 요청, 수집한 에이전트 카드의 JSON 메타데이터 리스트를 반환합니다.
-- **기본 검색 대상 목록**:
-  - `http://agent_echo_server:28001`
-  - `http://agent_langchain_server:28003`
+- **기본 탐색 대상 목록 (8대 서브 에이전트)**:
+  - `http://agent_data_processing_server:28001`
+  - `http://agent_web_search_server:28003`
+  - `http://agent_fundamental_server:28004`
+  - `http://agent_technical_server:28005`
+  - `http://agent_dart_disclosure_server:28006`
+  - `http://agent_macro_sector_server:28007`
+  - `http://agent_bull_bear_debate_server:28008`
+  - `http://agent_risk_management_server:28009`
 - **Agent Card 수집 구조 예시**:
   ```json
   [
     {
-      "name": "echo_agent",
-      "description": "Echo agent powered by LangGraph",
-      "url": "http://agent_echo_server:28001"
+      "name": "data_processing_agent",
+      "description": "LangGraph 기반 주식 시세/뉴스 수집, LLM 정제, 기술적 지표 가공 및 DB 적재 에이전트",
+      "url": "http://agent_data_processing_server:28001"
     },
     {
-      "name": "langchain_agent",
-      "description": "LangChain ReAct 에이전트 예제 (도구: 숫자 더하기, 날씨 조회)",
-      "url": "http://agent_langchain_server:28003"
+      "name": "web_search_agent",
+      "description": "DuckDuckGo 실시간 웹 검색 및 최신 금융 뉴스 탐색 ReAct 에이전트",
+      "url": "http://agent_web_search_server:28003"
+    },
+    {
+      "name": "bull_bear_debate_agent",
+      "description": "상승론자(Bull) vs 하락론자(Bear) 대립 토론 및 판사 최종 투자 판단 에이전트",
+      "url": "http://agent_bull_bear_debate_server:28008"
+    },
+    {
+      "name": "risk_management_agent",
+      "description": "100% Rule-Based 포트폴리오 비중 한도, 동적 손절선 및 급락장 게이트키퍼 검증 에이전트",
+      "url": "http://agent_risk_management_server:28009"
     }
   ]
   ```

@@ -1,0 +1,6 @@
+data_processing_template: |
+  📊 [{ticker}] 주식 하이브리드 데이터 처리 완료
+  - 현재가: {close_price:,}원 (20일 SMA: {sma_20:,.0f}원)
+  - 시장 센티먼트: {sentiment} (영향도 점수: {impact_score}/10)
+  - 핵심 뉴스 요약: {summary}
+  - PostgreSQL 적재 ID: #{db_record_id}

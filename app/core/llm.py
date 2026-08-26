@@ -1,5 +1,7 @@
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -8,6 +10,18 @@ from core.config import Settings
 from shared_core.logger import logger
 
 ProviderName = Literal["openai", "anthropic", "google"]
+
+
+class MockChatModel(FakeMessagesListChatModel):
+    """
+    bind_tools 및 with_structured_output을 안전하게 지원하는 모의 ChatModel.
+    """
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        return self
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
+        return self
 
 
 class LLMRegistry:
@@ -63,10 +77,7 @@ class LLMRegistry:
             "llm.no_key_found",
             message="No LLM API keys provided. Using mock LLM.",
         )
-        from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-        from langchain_core.messages import AIMessage
-
-        return FakeMessagesListChatModel(
+        return MockChatModel(
             responses=[
                 AIMessage(
                     content="[Mock LLM] API Key is not set. Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY in .env"

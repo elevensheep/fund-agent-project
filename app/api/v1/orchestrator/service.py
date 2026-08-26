@@ -14,6 +14,7 @@ class OrchestratorService:
         return InvokeResponse(
             output=result.get("output", ""),
             used_agents=result.get("used_agents", []),
+            plan=result.get("plan"),
             remote_response=result.get("remote_response"),
         )
 

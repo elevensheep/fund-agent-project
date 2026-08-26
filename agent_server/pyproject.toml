@@ -1,7 +1,7 @@
 [project]
 name = "a2a-server"
 version = "0.1.0"
-description = "Add your description here"
+description = "Remote Sub-Agents Server powered by LangGraph and Google ADK to_a2a"
 readme = "README.md"
 authors = [
     { name = "elevensheep", email = "fttc100@gmail.com" }
@@ -9,6 +9,9 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "a2a-sdk>=1.1.2",
+    "aiosqlite>=0.20.0",
+    "asyncpg>=0.29.0",
+    "duckduckgo-search>=6.0.0",
     "fastapi[standard]>=0.141.1",
     "google-adk>=2.6.3",
     "httpx>=0.28.1",
@@ -17,11 +20,18 @@ dependencies = [
     "langchain-google-genai>=4.3.3",
     "langchain-openai>=1.4.3",
     "langgraph>=1.2.11",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "prometheus-fastapi-instrumentator>=7.0.0",
     "pydantic-settings>=2.15.0",
+    "pydantic>=2.7.0",
+    "pyyaml>=6.0",
     "shared-core",
+    "sqlalchemy[asyncio]>=2.0.0",
     "sse-starlette>=2.0.0",
     "structlog>=26.1.0",
-    "prometheus-fastapi-instrumentator>=7.0.0",
+    "uvicorn>=0.30.0",
+    "websockets>=12.0",
 ]
 
 [build-system]
@@ -30,7 +40,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agents*", "core*"]
+include = ["agents*", "core*", "workers*"]
 
 [tool.uv]
 package = true
@@ -42,3 +52,13 @@ shared-core = { path = "../shared_core" }
 venvPath = "."
 venv = ".venv"
 extraPaths = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

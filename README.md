@@ -1,6 +1,6 @@
-# Agent Ecosystem (Agent Orchestrator)
+# Agent Ecosystem (Financial Multi-Agent Orchestrator)
 
-다중 에이전트 오케스트레이션 시스템으로, **Model Context Protocol (MCP) 기반 동적 탐색(Dynamic Discovery)**과 **Google ADK A2A(Agent-to-Agent) JSON-RPC 2.0 프로토콜**을 적용하여 여러 독립 에이전트와 모니터링 시스템을 중앙 조율(Supervisor)하는 프로젝트입니다.
+다중 에이전트 오케스트레이션 시스템으로, **Model Context Protocol (MCP) 기반 동적 탐색(Dynamic Discovery)**, **Google ADK A2A(Agent-to-Agent) JSON-RPC 2.0 프로토콜**, 그리고 **Plan-and-Execute (Planner ➡️ Parallel Dispatcher ➡️ Synthesizer)** 패턴을 결합하여 분산 8대 전문 서브 에이전트와 실시간 스트림 워커를 조율하는 금융 특화 마이크로서비스 플랫폼입니다.
 
 > 📚 **모듈별 및 기술 상세 문서는 [docs/README.md](docs/README.md)에서 확인하실 수 있습니다.**
 
@@ -16,35 +16,64 @@ graph TD
 
     subgraph Docker Network: agent_shared_net
         subgraph Orchestrator Server
-            App["🤖 agent_orchestrator_app<br/>(Supervisor / Port: 28000)"]
+            App["🤖 agent_orchestrator_app<br/>(Supervisor Agent / Port: 28000)"]
         end
 
         subgraph Protocol & Discovery Server
             MCP["🔌 agent_mcp_server<br/>(FastMCP SSE / Port: 28002)"]
         end
 
-        subgraph Remote A2A Sub-Agents
-            Echo["🗣️ agent_echo_server<br/>(Echo Agent / Port: 28001)"]
-            LangChain["⚡ agent_langchain_server<br/>(ReAct Agent / Port: 28003)"]
+        subgraph Remote A2A Sub-Agents (28001, 28003~28009)
+            DataProc["📊 agent_data_processing_server (28001)<br/>LangGraph Hybrid Collection & Postgres"]
+            WebSearch["🔍 agent_web_search_server (28003)<br/>DuckDuckGo ReAct Search"]
+            Fundamental["📈 agent_fundamental_server (28004)<br/>재무제표 & 밸류에이션 분석"]
+            Technical["📉 agent_technical_server (28005)<br/>차트 패턴 & 기술적 지표"]
+            Dart["📑 agent_dart_disclosure_server (28006)<br/>DART 전자공시 & 이벤트 감지"]
+            Macro["🌐 agent_macro_sector_server (28007)<br/>거시경제 & 섹터 트렌드"]
+            BullBear["🐂🐻 agent_bull_bear_debate_server (28008)<br/>상승 vs 하락 토론 & 판사 판정"]
+            Risk["🛡️ agent_risk_management_server (28009)<br/>100% Rule-Based 리스크 게이트키퍼"]
+        end
+
+        subgraph Data Persistence & Streaming
+            DB[("🐘 PostgreSQL (5432)<br/>table: stock_daily_metrics, stock_minute_prices")]
+            StreamWorker["⚡ agent_stream_worker<br/>한투증권 WebSocket 실시간 틱 수집 데몬 (No LLM)"]
         end
 
         subgraph Monitoring Stack
-            Prometheus["📊 agent_prometheus<br/>(Port: 29090)"]
-            Loki["📜 agent_loki<br/>(Port: 23100)"]
-            Grafana["📈 agent_grafana<br/>(Port: 23000)"]
+            Prometheus["📊 agent_prometheus (Port: 29090)"]
+            Loki["📜 agent_loki (Port: 23100)"]
+            Grafana["📈 agent_grafana (Port: 23000)"]
         end
 
-        %% Connections & Protocols
-        App -->|2. SSE Connection & Tool Call<br/>list_agent_cards| MCP
-        MCP -.->|3. Probe /.well-known/agent-card.json| Echo
-        MCP -.->|3. Probe /.well-known/agent-card.json| LangChain
-        
-        App -->|4. A2A JSON-RPC 2.0 Task Delegation<br/>SendMessage| Echo
-        App -->|4. A2A JSON-RPC 2.0 Task Delegation<br/>SendMessage| LangChain
+        %% Dynamic Discovery flow
+        App -->|2. SSE Client & list_agent_cards| MCP
+        MCP -.->|3. Probe /.well-known/agent-card.json| DataProc
+        MCP -.->|3. Probe /.well-known/agent-card.json| WebSearch
+        MCP -.->|3. Probe /.well-known/agent-card.json| Fundamental
+        MCP -.->|3. Probe /.well-known/agent-card.json| Technical
+        MCP -.->|3. Probe /.well-known/agent-card.json| Dart
+        MCP -.->|3. Probe /.well-known/agent-card.json| Macro
+        MCP -.->|3. Probe /.well-known/agent-card.json| BullBear
+        MCP -.->|3. Probe /.well-known/agent-card.json| Risk
 
+        %% A2A Task Delegation flow (Plan-and-Execute)
+        App -->|4. A2A Parallel Dispatch| DataProc
+        App -->|4. A2A Parallel Dispatch| WebSearch
+        App -->|4. A2A Parallel Dispatch| Fundamental
+        App -->|4. A2A Parallel Dispatch| Technical
+        App -->|4. A2A Parallel Dispatch| Dart
+        App -->|4. A2A Parallel Dispatch| Macro
+        App -->|4. A2A Parallel Dispatch| BullBear
+        App -->|4. A2A Parallel Dispatch| Risk
+
+        %% Streaming & Persistence
+        StreamWorker -->|1분봉 롤링 벌크 적재| DB
+        DataProc -->|시세/지표 영속화 & 조회| DB
+
+        %% Observability
         Prometheus -.->|Scrape /metrics| App
-        Prometheus -.->|Scrape /metrics| Echo
-        Prometheus -.->|Scrape /metrics| LangChain
+        Prometheus -.->|Scrape /metrics| DataProc
+        Prometheus -.->|Scrape /metrics| Risk
         Grafana -->|Datasource| Prometheus
         Grafana -->|Datasource| Loki
     end
@@ -58,7 +87,7 @@ graph TD
 agent_test/
 ├── 📚 docs/                    # 모듈별 통합 기술 문서 디렉토리
 │   ├── app/                    # Orchestrator Server 상세 문서
-│   ├── agent_server/           # Sub-Agents Server 상세 문서
+│   ├── agent_server/           # 8대 Sub-Agents & Stream Worker 문서
 │   ├── mcp_server/             # FastMCP Discovery Server 상세 문서
 │   ├── shared_core/            # Shared Core Library 상세 문서
 │   ├── monitoring/             # Monitoring Stack 상세 문서
@@ -68,52 +97,45 @@ agent_test/
 │   ├── architecture.md         # 전체 아키텍처 & 프로토콜 흐름도
 │   └── README.md               # 문서 통합 목차 가이드
 │
-├── 🤖 app/                     # Orchestrator (Supervisor Client Server)
-│   ├── agents/                 # Supervisor 에이전트 및 Base 인터페이스 정의
-│   │   ├── base.py             # 에이전트 공통 추상 클래스 (BaseAgent)
-│   │   ├── factory.py          # Supervisor 에이전트 생성 팩토리 (AgentFactory)
-│   │   ├── supervisor.py       # A2A Task 위임 & MCP 동적 등록 관리자
-│   │   └── prompts/            # Supervisor 전역 프롬프트 (supervisor.yml)
-│   ├── api/                    # FastAPI 외부 노출 REST API 엔드포인트
-│   │   └── v1/orchestrator/   # /api/v1/supervisor/invoke 등 오케스트레이터 라우터
-│   ├── core/                   # 앱 전역 설정, LLM 레지스트리, MCP 클라이언트
-│   │   ├── config.py           # Settings 관리 (Pydantic BaseSettings)
-│   │   ├── lifespan.py         # FastAPI 애플리케이션 시작/종료 수명주기
-│   │   ├── llm.py              # Multi-provider LLM Registry (OpenAI/Anthropic/Google)
-│   │   └── mcp_client.py       # MCP Server 연동 & Agent Card 동적 수집 유틸리티
-│   ├── dependencies/           # FastAPI 의존성 주입 (get_supervisor 등)
-│   ├── tests/                  # Supervisor 및 Health API 유닛 테스트 (pytest)
-│   ├── application.py          # FastAPI 앱 생성 팩토리 (create_app)
-│   └── main.py                 # Uvicorn 진입점 서버 (Port: 28000)
+├── 🤖 app/                     # Orchestrator (Supervisor Plan-and-Execute)
+│   ├── agents/                 # Planner, Parallel Dispatcher, Synthesizer, Supervisor
+│   │   ├── planner.py          # [Planner] 의도 분석 및 실행 계획(DAG) 수립
+│   │   ├── dispatcher.py       # [Dispatcher] asyncio.gather 기반 병렬 호출기
+│   │   ├── synthesizer.py      # [Synthesizer] 결과 종합 및 리포트 생성
+│   │   ├── supervisor.py       # Plan-and-Execute 메인 워크플로우
+│   │   └── factory.py          # AgentFactory
+│   ├── api/                    # /api/v1/supervisor/invoke, stream, info 엔드포인트
+│   ├── core/                   # LLM Registry, MCP SSE 클라이언트
+│   └── tests/                  # Pytest 유닛 및 통합 테스트 수트
 │
-├── 🗣️ agent_server/            # Remote Sub-Agents Server (원격 서브 에이전트)
-│   ├── agents/                 # 에이전트 모듈 정의
-│   │   ├── echo_agent.py       # Echo 메시지 수신/반환 테스트 에이전트 (Port: 28001)
-│   │   ├── langchain_agent.py  # LangChain ReAct 지능형 서브 에이전트 (Port: 28003)
-│   │   └── prompts/            # 서브 에이전트 프롬프트 (echo.yml, langchain.yml)
-│   └── core/                   # 서브 에이전트 전역 LLM 레지스트리 및 설정
+├── 🗣️ agent_server/            # 8대 금융 전문 Sub-Agents & Background Worker
+│   ├── agents/                 # A2A 웹 서비스 에이전트 모듈 (to_a2a)
+│   │   ├── data_processing_agent.py  # 주식 데이터 취합 (Rule/LLM) & DB (Port: 28001)
+│   │   ├── web_search_agent.py       # DuckDuckGo ReAct 웹 검색 (Port: 28003)
+│   │   ├── fundamental_agent.py      # 재무제표 3표 & 밸류에이션 분석 (Port: 28004)
+│   │   ├── technical_agent.py        # 차트 패턴 & 기술적 지표/신호 (Port: 28005)
+│   │   ├── dart_disclosure_agent.py  # DART 전자공시 & 오버행 분석 (Port: 28006)
+│   │   ├── macro_sector_agent.py     # 거시경제 & 섹터 트렌드 (Port: 28007)
+│   │   ├── bull_bear_debate_agent.py # Bull vs Bear 토론 & 판사 판정 (Port: 28008)
+│   │   └── risk_management_agent.py  # 100% Rule-Based 리스크 게이트키퍼 (Port: 28009)
+│   ├── workers/                # 백그라운드 실시간 수집 워커 (No LLM)
+│   │   └── stream_worker.py    # 한투 WebSocket 틱 수신 & 1분봉 롤링 DB 벌크 적재
+│   └── core/                   # PostgreSQL async 세션 & SQLAlchemy ORM 모델
 │
 ├── 🔌 mcp_server/              # Model Context Protocol (FastMCP Server)
-│   ├── tools/                  # MCP 도구 정의
-│   │   └── agent_card.py       # list_agent_cards (에이전트 동적 탐색 도구)
+│   ├── tools/                  # list_agent_cards (8대 에이전트 동적 탐색 도구)
 │   └── server.py               # FastMCP SSE 전송 서버 진입점 (Port: 28002)
 │
 ├── 📦 shared_core/             # 공통 공유 라이브러리 (Shared Core Package)
 │   └── src/shared_core/
-│       ├── logger.py           # UTF-8 지원 Structlog 렌더러 및 로깅 관리자
-│       └── prompt.py           # YAML 프롬프트 로더 유틸리티
+│       ├── base_node.py        # LangGraph BaseNode 추상화 (ABC, DI, 구조화 로깅)
+│       ├── logger.py           # UTF-8 지원 Structlog 로거
+│       └── prompt.py           # YAML 프롬프트 로더
 │
-├── 📊 monitoring/              # 관찰 가능성 모니터링 스택 (Monitoring Stack)
-│   ├── grafana/                # Grafana 대시보드 및 데이터소스 프로비저닝 (Port: 23000)
-│   ├── prometheus.yml          # Prometheus 메트릭 수집 주기 및 타겟 설정 (Port: 29090)
-│   ├── promtail-config.yaml    # Docker 컨테이너 로그 수집 설정
-│   └── docker-compose.yml      # Loki, Promtail, Prometheus, Grafana, cAdvisor 컴포즈
-│
-├── 📜 scripts/                 # 각 모듈별 제어 쉘 스크립트
-│   ├── app/                    # Orchestrator 실행/종료 스크립트
-│   ├── agent_server/           # Remote Agents 실행/종료 스크립트
-│   ├── mcp_server/             # MCP Server 실행/종료 스크립트
-│   └── monitoring/             # Monitoring Stack 실행/종료 스크립트
+├── 📊 monitoring/              # 관찰 가능성 모니터링 스택
+│   ├── grafana/                # Grafana 대시보드 (Port: 23000)
+│   ├── prometheus.yml          # Prometheus 메트릭 수집 (Port: 29090)
+│   └── promtail-config.yaml    # Loki 컨테이너 로그 수집
 │
 ├── 🚀 start.sh                 # 전체 서비스 원클릭 시작 스크립트
 └── 🛑 stop.sh                  # 전체 서비스 원클릭 종료 스크립트
@@ -121,65 +143,48 @@ agent_test/
 
 ---
 
-## ⚙️ 주요 기능 및 특징
+## 📍 서비스 포트 매핑 (Service Ports)
 
-1. **MCP 기반 동적 에이전트 탐색 (Dynamic Discovery)**
-   - 정적 `.env` 설정 없이, Supervisor 실행 시 MCP Server(`agent_mcp_server`)의 `list_agent_cards` 도구를 호출하여 서브 에이전트들의 접속 URL 및 능력(Agent Card)을 동적으로 등록합니다.
-2. **Google ADK A2A JSON-RPC 2.0 호환**
-   - 표준화된 A2A 통신 메커니즘을 적용하여 서브 에이전트(`echo`, `langchain`) 간의 메시지 전달 및 결과 수집을 수행합니다.
-3. **통합 모니터링 & 구조화 로그**
-   - Prometheus + Grafana 메트릭 수집 및 Loki + Promtail을 통한 실시간 UTF-8 구조화 로그 수집(`task.*`, `artifact.*`)을 제공합니다.
+| 모듈 명 | 서비스 역할 | 호스트 포트 | 주요 기능 |
+| :--- | :--- | :--- | :--- |
+| **`app`** | Orchestrator Server | `28000` | Supervisor Plan-and-Execute REST API |
+| **`data_processing_agent`** | Data Processing Sub-Agent | `28001` | LangGraph 시세 수집 & 정제 & DB 적재 |
+| **`mcp_server`** | FastMCP Discovery Server | `28002` | `list_agent_cards` SSE 동적 탐색 |
+| **`web_search_agent`** | Web Search Sub-Agent | `28003` | DuckDuckGo 실시간 웹 검색 |
+| **`fundamental_agent`** | Fundamental Sub-Agent | `28004` | 재무 3표 & 밸류에이션(PER/PBR/ROE) |
+| **`technical_agent`** | Technical Sub-Agent | `28005` | 차트 패턴 & 지지/저항선 & 매매 신호 |
+| **`dart_disclosure_agent`**| DART Sub-Agent | `28006` | 전자공시 & 오버행/희석률 분석 |
+| **`macro_sector_agent`** | Macro & Sector Sub-Agent | `28007` | 글로벌 거시경제 & 섹터 상대강도 |
+| **`bull_bear_debate_agent`**| Bull vs Bear Sub-Agent | `28008` | 다자간 토론 & 판사 최종 투자 의견 |
+| **`risk_management_agent`** | Risk Management Sub-Agent| `28009` | 100% Rule-Based 비중 한도 & 손절선 |
+| **`stream_worker`** | Ingestion Daemon | N/A | 한투증권 WebSocket 실시간 틱 수집 |
+| **`postgres`** | PostgreSQL Database | `5432` | 시계열 1분봉 & 일간 정제 지표 영속화 |
+| **`prometheus`** | Prometheus Metrics | `29090` | 전체 서비스 HTTP 메트릭 스크랩 |
+| **`grafana`** | Grafana UI | `23000` | 로그 & 메트릭 통합 대시보드 (`admin`/`admin`) |
 
 ---
 
-## 🚀 시작하기
+## 💡 빠른 시작 (Quick Start)
 
-### 1. 요구 사항
-- Docker & Docker Compose
-- Bash Shell
-
-### 2. 환경 설정
-`.env.example` 파일을 복사하여 환경 변수 파일(`.env`)을 생성합니다.
+### 1. 환경 설정
 ```bash
 cp .env.example .env
 ```
-*(선택 사항: `.env`에 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`를 설정할 수 있습니다. 키가 없을 경우 자동으로 Mock LLM 모드로 작동합니다.)*
 
-### 3. 서비스 실행
-제공된 통합 관리 스크립트를 사용하여 모든 컨테이너 인프라를 한 번에 생성 및 시작합니다.
+### 2. 전체 서비스 실행
 ```bash
 ./start.sh
 ```
 
----
-
-## 📍 서비스 엔드포인트 (Endpoints)
-
-| 서비스 명 | 컨테이너 이름 | 포트 | 용도 / 설명 |
-| :--- | :--- | :--- | :--- |
-| **Orchestrator App** | `agent_orchestrator_app` | `28000` | Supervisor 에이전트 API ([http://localhost:28000](http://localhost:28000)) |
-| **Echo Sub-Agent** | `agent_echo_server` | `28001` | Echo 테스트 서브 에이전트 ([http://localhost:28001](http://localhost:28001)) |
-| **MCP Server** | `agent_mcp_server` | `28002` | MCP SSE 서버 및 에이전트 탐색 도구 ([http://localhost:28002](http://localhost:28002)) |
-| **LangChain Sub-Agent** | `agent_langchain_server` | `28003` | LangChain ReAct 서브 에이전트 ([http://localhost:28003](http://localhost:28003)) |
-| **Grafana Dashboard** | `agent_grafana` | `23000` | 모니터링 대시보드 ([http://localhost:23000](http://localhost:23000), `admin`/`admin`) |
-| **Prometheus** | `agent_prometheus` | `29090` | 메트릭 수집 서버 ([http://localhost:29090](http://localhost:29090)) |
-
----
-
-## 💡 API 사용 예시 (curl)
-
-### Supervisor 에이전트 호출 (자동 탐색 및 서브 에이전트 위임)
+### 3. API 호출 테스트
 ```bash
+# 삼성전자 종합 분석 및 리스크 심의 요청
 curl -X POST http://localhost:28000/api/v1/supervisor/invoke \
   -H "Content-Type: application/json" \
-  -d '{"message": "echo 에이전트에게 인사하고, 서울 날씨 알아봐줘"}'
+  -d '{"message": "삼성전자(005930) 종합 분석 및 투자 심의해줘"}'
 ```
 
----
-
-## 🛑 전체 서비스 종료
-
+### 4. 하네스 단위 테스트 실행
 ```bash
-./stop.sh
+cd app && uv run pytest
 ```
-> **참고**: 스크립트를 통해 서비스를 종료하더라도 Docker 데이터 볼륨은 유지됩니다.

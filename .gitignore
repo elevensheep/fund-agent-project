@@ -45,3 +45,8 @@ env/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
