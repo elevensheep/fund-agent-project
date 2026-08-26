@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # MCP Server
     mcp_server_url: str = "http://agent_mcp_server:28002"
 
+    # Redis Cache Configuration
+    redis_host: str = "agent_redis"
+    redis_port: int = 6379
+    redis_password: str = ""
+    redis_cache_ttl_seconds: int = 300  # 5 minutes default
+    enable_cache: bool = True
+
 
 
 @lru_cache

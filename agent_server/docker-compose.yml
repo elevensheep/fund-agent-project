@@ -16,6 +16,17 @@ services:
     networks:
       - agent_net
 
+  redis:
+    image: redis:7-alpine
+    container_name: agent_redis
+    restart: unless-stopped
+    ports:
+      - "26379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - agent_net
+
   data_processing_agent_server:
     build:
       context: ..
@@ -204,6 +215,7 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
 networks:
   agent_net:

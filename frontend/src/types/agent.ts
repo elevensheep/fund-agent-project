@@ -180,6 +180,9 @@ export interface InvokeResponse {
   step_results?: StepResults;
   session_id?: string;
   timestamp?: string;
+  is_cached?: boolean;
+  cached_at?: string;
+  ttl_remaining?: number;
 }
 
 export interface CandleData {

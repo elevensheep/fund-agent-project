@@ -15,6 +15,9 @@ interface AgentState {
   finalReport: string;
   streamingTokens: string;
   isMockMode: boolean;
+  isCached: boolean;
+  cachedAt: string | null;
+  ttlRemaining: number | null;
   activeTab: "dashboard" | "dag" | "report" | "monitoring";
   isSystemStatusOpen: boolean;
   history: Array<{ ticker: string; name: string; query: string; timestamp: string }>;
@@ -32,6 +35,7 @@ interface AgentState {
   setFinalReport: (report: string) => void;
   appendStreamingToken: (token: string) => void;
   setMockMode: (isMock: boolean) => void;
+  setIsCached: (isCached: boolean, cachedAt?: string, ttl?: number) => void;
   setActiveTab: (tab: "dashboard" | "dag" | "report" | "monitoring") => void;
   setIsSystemStatusOpen: (open: boolean) => void;
   resetAnalysis: () => void;
@@ -62,6 +66,9 @@ export const useAgentStore = create<AgentState>((set) => ({
   finalReport: defaultSamsung.output,
   streamingTokens: "",
   isMockMode: false,
+  isCached: false,
+  cachedAt: null,
+  ttlRemaining: null,
   activeTab: "dashboard",
   isSystemStatusOpen: false,
   history: [
@@ -91,6 +98,8 @@ export const useAgentStore = create<AgentState>((set) => ({
   appendStreamingToken: (token) =>
     set((state) => ({ streamingTokens: state.streamingTokens + token })),
   setMockMode: (isMockMode) => set({ isMockMode }),
+  setIsCached: (isCached, cachedAt, ttlRemaining) =>
+    set({ isCached, cachedAt: cachedAt || null, ttlRemaining: ttlRemaining || null }),
   setActiveTab: (activeTab) => set({ activeTab }),
   setIsSystemStatusOpen: (isSystemStatusOpen) => set({ isSystemStatusOpen }),
 
@@ -102,12 +111,18 @@ export const useAgentStore = create<AgentState>((set) => ({
       stepResults: {},
       finalReport: "",
       streamingTokens: "",
+      isCached: false,
+      cachedAt: null,
+      ttlRemaining: null,
     }),
 
   loadResponse: (resp, stockName) =>
     set((state) => ({
       isAnalyzing: false,
       currentStepId: 4,
+      isCached: Boolean(resp.is_cached),
+      cachedAt: resp.cached_at || null,
+      ttlRemaining: resp.ttl_remaining || null,
       plan: resp.plan || state.plan,
       stepResults: resp.step_results || state.stepResults,
       finalReport: resp.output,

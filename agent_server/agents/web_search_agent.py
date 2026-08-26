@@ -12,6 +12,9 @@ from langgraph.prebuilt import create_react_agent
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from core.llm import get_chat_model
+import os
+import redis
+from shared_core.cache import RedisCacheManager
 from shared_core.logger import logger
 from shared_core.prompt import load_prompt
 
@@ -19,9 +22,28 @@ from shared_core.prompt import load_prompt
 @tool
 def web_search(query: str, max_results: int = 5) -> str:
     """
-    DuckDuckGo 엔진을 사용하여 최신 웹 및 주식 시장 뉴스, 기업 정보를 검색합니다.
+    DuckDuckGo 엔진을 사용하여 최신 웹 및 주식 시장 뉴스, 기업 정보를 검색합니다. (Redis 캐시 지원)
     """
+    cache_key = RedisCacheManager.generate_key("cache:web_search", RedisCacheManager.hash_text(f"{query}:{max_results}"))
+    redis_client = None
+
+    try:
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "agent_redis"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            password=os.getenv("REDIS_PASSWORD") or None,
+            decode_responses=True,
+            socket_timeout=1.5,
+        )
+        cached_result = redis_client.get(cache_key)
+        if cached_result:
+            logger.info("web_search.cache_hit", query=query, cache_key=cache_key)
+            return cached_result
+    except Exception as e:
+        logger.debug("web_search.cache_check_failed", error=str(e))
+
     logger.info("web_search.execute", query=query, max_results=max_results)
+    output = None
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
@@ -33,17 +55,28 @@ def web_search(query: str, max_results: int = 5) -> str:
                     body = r.get("body", "")
                     href = r.get("href", "")
                     formatted.append(f"- [{title}]({href}): {body}")
-                return "\n".join(formatted)
+                output = "\n".join(formatted)
     except Exception as e:
         logger.warning("web_search.ddgs_failed_fallback", query=query, error=str(e))
 
-    # Mock Fallback when offline or rate-limited
-    return (
-        f"🔍 '{query}' 웹 검색 결과:\n"
-        f"1. [최신 시장 브리핑] 반도체 섹터 수출 증가세 지속, 주요 기업 실적 개선 전망.\n"
-        f"2. [기업 공시 요약] 신제품 라인업 양산 본격화 및 글로벌 공급 계약 체결 소식.\n"
-        f"3. [증권가 리포트] 목표주가 상향 조정 및 외국인/기관 순매수 유입세 확인."
-    )
+    if not output:
+        # Mock Fallback when offline or rate-limited
+        output = (
+            f"🔍 '{query}' 웹 검색 결과:\n"
+            f"1. [최신 시장 브리핑] 반도체 섹터 수출 증가세 지속, 주요 기업 실적 개선 전망.\n"
+            f"2. [기업 공시 요약] 신제품 라인업 양산 본격화 및 글로벌 공급 계약 체결 소식.\n"
+            f"3. [증권가 리포트] 목표주가 상향 조정 및 외국인/기관 순매수 유입세 확인."
+        )
+
+    # Cache for 10 minutes (600 seconds)
+    if redis_client:
+        try:
+            redis_client.set(cache_key, output, ex=int(os.getenv("REDIS_SEARCH_CACHE_TTL_SECONDS", 600)))
+            logger.info("web_search.cache_stored", query=query, cache_key=cache_key)
+        except Exception:
+            pass
+
+    return output
 
 
 tools = [web_search]

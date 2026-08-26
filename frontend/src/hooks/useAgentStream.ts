@@ -96,7 +96,7 @@ export function useAgentStream() {
   );
 
   const startAnalysis = useCallback(
-    async (queryText: string) => {
+    async (queryText: string, forceRefresh: boolean = false) => {
       const { ticker, name } = extractTicker(queryText);
       setStock(ticker, name);
 
@@ -133,7 +133,7 @@ export function useAgentStream() {
       }, 8000);
 
       try {
-        const response = await invokeSupervisor(queryText, undefined, false);
+        const response = await invokeSupervisor(queryText, undefined, false, forceRefresh);
         clearTimeout(stepTimer1);
         clearTimeout(stepTimer2);
         clearTimeout(stepTimer3);
