@@ -1,5 +1,6 @@
 global:
-  scrape_interval: 5s
+  scrape_interval: 30s
+  evaluation_interval: 30s
 
 scrape_configs:
   - job_name: 'orchestrator'
@@ -7,15 +8,45 @@ scrape_configs:
     static_configs:
       - targets: ['agent_orchestrator_app:28000']
 
-  - job_name: 'echo_agent'
+  - job_name: 'data_processing_agent'
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['agent_echo_server:28001']
+      - targets: ['agent_data_processing_server:28001']
 
-  - job_name: 'langchain_agent'
+  - job_name: 'web_search_agent'
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['agent_langchain_server:28003']
+      - targets: ['agent_web_search_server:28003']
+
+  - job_name: 'fundamental_agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['agent_fundamental_server:28004']
+
+  - job_name: 'technical_agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['agent_technical_server:28005']
+
+  - job_name: 'dart_disclosure_agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['agent_dart_disclosure_server:28006']
+
+  - job_name: 'macro_sector_agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['agent_macro_sector_server:28007']
+
+  - job_name: 'bull_bear_debate_agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['agent_bull_bear_debate_server:28008']
+
+  - job_name: 'risk_management_agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['agent_risk_management_server:28009']
 
   - job_name: 'cadvisor'
     static_configs:
