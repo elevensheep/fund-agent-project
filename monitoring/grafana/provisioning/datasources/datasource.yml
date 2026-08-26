@@ -6,9 +6,11 @@ datasources:
     url: http://agent_prometheus:9090
     access: proxy
     isDefault: true
+    editable: true
 
   - name: Loki
     type: loki
     url: http://agent_loki:3100
     access: proxy
     isDefault: false
+    editable: true

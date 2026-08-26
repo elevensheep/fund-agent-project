@@ -439,7 +439,7 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "loki", "uid": "Loki" },
+      "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 31 },
       "id": 11,
       "options": {
@@ -454,9 +454,9 @@
       },
       "targets": [
         {
-          "datasource": { "type": "loki", "uid": "Loki" },
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "editorMode": "code",
-          "expr": "{container_name=~\"agent_.*\"}",
+          "expr": "{container=~\"agent_.*\"}",
           "queryType": "range",
           "refId": "A"
         }
