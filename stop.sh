@@ -7,6 +7,9 @@ echo "=================================================="
 
 # 의존성 역순으로 종료
 echo ""
+bash "$ROOT_DIR/scripts/frontend/stop.sh"
+
+echo ""
 bash "$ROOT_DIR/scripts/app/stop.sh"
 
 echo ""

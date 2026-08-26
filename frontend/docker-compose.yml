@@ -1,0 +1,22 @@
+services:
+  agent_frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NEXT_PUBLIC_API_URL=http://localhost:28000
+      - INTERNAL_API_URL=http://agent_orchestrator_app:28000
+      - NEXT_PUBLIC_GRAFANA_URL=http://localhost:23000
+      - NEXT_PUBLIC_PROMETHEUS_URL=http://localhost:29090
+    networks:
+      - agent_shared_net
+
+networks:
+  agent_shared_net:
+    external: true
