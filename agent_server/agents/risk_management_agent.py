@@ -1,33 +1,41 @@
+import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 from typing_extensions import TypedDict
 
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from google.adk.agents.langgraph_agent import LangGraphAgent
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from shared_core import BaseNode
+from core.db_stock_tool import (
+    calculate_stock_indicators,
+    extract_ticker_from_text,
+    fetch_latest_stock_price,
+    get_stock_metadata,
+)
+from core.llm import get_chat_model
+from shared_core import BaseNode, extract_json_from_llm_response, extract_text_from_llm_message
 from shared_core.logger import logger
-from agents.schemas.stock_schema import RiskManagementSchema
 
 
 class RiskState(TypedDict, total=False):
     ticker: str
+    stock_name: str
+    current_price: float
     proposed_weight: float
-    current_portfolio: Dict[str, Any]
-    market_status: Dict[str, Any]
-    verdict: str
     approved_weight: float
+    verdict: str
     stop_loss_price: float
-    rejection_reasons: List[str]
+    panic_status: bool
     output: str
     messages: List[Any]
 
 
-class IngestProposalNode(BaseNode[RiskState, Dict[str, Any]]):
-    """[Rule 1] 투자 제안 및 계좌/시장 데이터 수신 노드"""
+class LLMRiskGatekeeperNode(BaseNode[RiskState, Dict[str, Any]]):
+    """[LLM + DB Tool] DB 실시간 시세 및 ATR 기반 손절가 산정 및 LLM 수석 리스크 관리관(CRO) 심의"""
 
     async def process(self, state: RiskState) -> Dict[str, Any]:
         messages = state.get("messages", [])
@@ -36,122 +44,139 @@ class IngestProposalNode(BaseNode[RiskState, Dict[str, Any]]):
             last_msg = messages[-1]
             raw_text = getattr(last_msg, "content", str(last_msg))
 
-        ticker_match = re.search(r"\b\d{6}\b", str(raw_text))
-        ticker = ticker_match.group(0) if ticker_match else state.get("ticker", "005930")
+        ticker = extract_ticker_from_text(f"{raw_text} {state.get('ticker', '')}")
+        meta = get_stock_metadata(ticker or raw_text)
+        ticker = meta["ticker"]
+        stock_name = meta["name"]
+        sector = meta.get("sector", "대표 우량기업")
 
-        # Mock Portfolio & Market Info
-        portfolio = state.get("current_portfolio", {
-            "total_assets": 100000000, # 1억원
-            "current_stock_weight": 0.05,
-            "sector_weight": 0.18,     # 현재 반도체 섹터 비중 18%
-        })
-        market = state.get("market_status", {
-            "kospi_change_rate": +0.85, # 당일 코스피 등락률
-            "current_price": 75000.0,
-            "atr_14": 1500.0,
-            "daily_volume_krw": 45000000000, # 450억원
-        })
+        # 공용 DB Tool에서 최신 실데이터 및 ATR 지표 가져오기
+        indicators = calculate_stock_indicators(ticker)
+        current_price = indicators["current_price"]
+        atr_14 = indicators["atr_14"]
+
+        # 변동성 비율(ATR %) 기반 리스크 패리티 권장 비중 산출
+        volatility_ratio = (atr_14 / current_price) if current_price > 0 else 0.025
+        if volatility_ratio <= 0.022:
+            base_recommended_weight = 0.14
+            tier_name = "저변동성 대형 우량주 (ATR ≤ 2.2%)"
+        elif volatility_ratio <= 0.035:
+            base_recommended_weight = 0.10
+            tier_name = "중간 변동성 일반 상장주 (2.2% < ATR ≤ 3.5%)"
+        elif volatility_ratio <= 0.050:
+            base_recommended_weight = 0.065
+            tier_name = "고변동성 성장/테마주 (3.5% < ATR ≤ 5.0%)"
+        else:
+            base_recommended_weight = 0.035
+            tier_name = "초고변동성 급등락주 (ATR > 5.0%)"
+
+        fallback_stop = round(current_price - (atr_14 * 1.5), -2)
+        fallback_weight = base_recommended_weight
+
+        llm = get_chat_model()
+
+        system_prompt = (
+            "당신은 헤지펀드 투자 심의 위원회의 수석 리스크 관리관(Chief Risk Officer, CRO)입니다.\n"
+            f"주어진 종목({stock_name}, 티커: {ticker}, 업종: {sector})에 대해\n"
+            f"PostgreSQL DB 실데이터 현재가({current_price:,.0f}원), 14일 ATR 변동폭({atr_14:,.0f}원, 변동성 비율: {volatility_ratio*100:.1f}%)을 바탕으로\n"
+            f"변동성 패리티 가이드라인({tier_name} 기준 권장 {base_recommended_weight*100:.1f}%)을 검토하여\n"
+            "단일 종목 최대 한도(15.0%) 내에서 2.0% ~ 15.0% 사이의 정밀 승인 편입 비중을 차등 심의하고,\n"
+            "동적 손절선(ATR 1.5x 통제) 및 패닉장 여부를 검증하여 리스크 심의 보고서를 작성하십시오.\n\n"
+            "리스크 심의 가이드라인:\n"
+            "- 저변동성 대형 우량주 (ATR ≤ 2.2%): 12.0% ~ 15.0% 승인 (APPROVED)\n"
+            "- 중간 변동성 일반 상장주 (2.2% < ATR ≤ 3.5%): 8.0% ~ 11.5% 승인 (APPROVED / ADJUSTED)\n"
+            "- 고변동성 성장/테마주 (3.5% < ATR ≤ 5.0%): 5.0% ~ 7.5% 하향 조정 승인 (ADJUSTED)\n"
+            "- 초고변동성/급등락주 (ATR > 5.0%): 2.0% ~ 4.5% 제한 승인 (ADJUSTED)\n\n"
+            "작성 가이드라인:\n"
+            f"1. 리포트 본문:\n"
+            f"🛡️ [{stock_name} ({ticker})] 수석 리스크 관리관(CRO) 심의 결과\n"
+            "- 최종 판정: [APPROVED / ADJUSTED / REJECTED 중 택1]\n"
+            f"- 승인 편입 비중: [승인비중]% (변동성 {volatility_ratio*100:.1f}% 및 리스크 패리티 가이드 적용)\n"
+            f"- 산정 동적 손절가: [손절가]원 (현재가 {current_price:,.0f}원 대비 -X.X%, ATR 1.5x 통제)\n"
+            "- 분할 매수 밴드: 1차 매수가 / 2차 매수가\n"
+            "- 리스크 심의 사유 및 CRO 총평 (2문장)\n\n"
+            "2. 리포트 맨 마지막에 반드시 아래 JSON 블록을 정확한 수치로 포함하십시오 (JSON 외 다른 글자 없이):\n"
+            "```json\n"
+            "{\n"
+            '  "verdict": "APPROVED" | "ADJUSTED" | "REJECTED",\n'
+            f'  "approved_weight": <float e.g. {base_recommended_weight}>,\n'
+            '  "stop_loss_price": <float>,\n'
+            '  "panic_market_flag": true | false,\n'
+            '  "reason": "<string>"\n'
+            "}\n"
+            "```"
+        )
+
+        user_prompt = (
+            f"종목명: {stock_name} (종목코드: {ticker}, 업종: {sector})\n"
+            f"DB 현재가: {current_price:,.0f}원, 14일 ATR 변동폭: {atr_14:,.0f}원 (변동성 비율: {volatility_ratio*100:.1f}%)\n"
+            f"변동성 티어: {tier_name} (기준 권장 비중: {base_recommended_weight*100:.1f}%)\n"
+            f"사용자 요청: {raw_text or f'{stock_name} 리스크 심의 및 동적 비중/손절가 확정'}"
+        )
+
+        try:
+            resp = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+            report_text = extract_text_from_llm_message(resp.content)
+        except Exception as e:
+            logger.warning("risk_management_agent.llm_fallback", error=str(e))
+            report_text = (
+                f"🛡️ [{stock_name} ({ticker})] 수석 리스크 관리관(CRO) 심의 결과\n"
+                f"- 최종 판정: [{'APPROVED' if base_recommended_weight >= 0.10 else 'ADJUSTED'}] ({tier_name})\n"
+                f"- 승인 편입 비중: {fallback_weight * 100:.1f}% (변동성 {volatility_ratio*100:.1f}% 반영)\n"
+                f"- 산정 동적 손절가: {fallback_stop:,.0f}원 (진입가 대비 -{((current_price - fallback_stop)/current_price)*100:.1f}%, ATR 1.5배 기준)\n"
+                f"- CRO 총평: 변동성 {volatility_ratio*100:.1f}% 수준에 부합하도록 포트폴리오 비중을 {fallback_weight * 100:.1f}%로 제한 심의 승인합니다.\n\n"
+                "```json\n"
+                + json.dumps({
+                    "verdict": "APPROVED" if base_recommended_weight >= 0.10 else "ADJUSTED",
+                    "approved_weight": fallback_weight,
+                    "stop_loss_price": fallback_stop,
+                    "panic_market_flag": False,
+                    "reason": f"{tier_name} 기준 비중 {fallback_weight*100:.1f}% 산정",
+                }, ensure_ascii=False, indent=2)
+                + "\n```"
+            )
+
+        # LLM 응답에서 구조화 JSON 추출
+        parsed_json = extract_json_from_llm_response(report_text) or {}
+
+        verdict = str(parsed_json.get("verdict", "APPROVED")).upper()
+        if verdict not in ["APPROVED", "ADJUSTED", "REJECTED"]:
+            verdict = "APPROVED"
+
+        app_weight = float(parsed_json.get("approved_weight", fallback_weight))
+        app_weight = max(0.01, min(0.15, app_weight))
+
+        stop_loss = float(parsed_json.get("stop_loss_price", fallback_stop))
+        if stop_loss <= 0 or stop_loss >= current_price:
+            stop_loss = fallback_stop
+
+        panic_flag = bool(parsed_json.get("panic_market_flag", False))
+        reason = str(parsed_json.get("reason", "포트폴리오 가이드라인 100% 준수"))
+
+        # JSON 코드 블록을 제거한 순수 마크다운 리포트
+        clean_report = re.sub(r"```(?:json)?\s*\{[\s\S]*?\}\s*```", "", report_text).strip()
 
         return {
             "ticker": ticker,
-            "proposed_weight": state.get("proposed_weight", 0.15),
-            "current_portfolio": portfolio,
-            "market_status": market,
-            "rejection_reasons": [],
-        }
-
-
-class MarketPanicRuleNode(BaseNode[RiskState, Dict[str, Any]]):
-    """[Rule 2] 시장 패닉/급락 검증 노드 (코스피 -3.0% 이하 시 전면 매수 반려)"""
-
-    async def process(self, state: RiskState) -> Dict[str, Any]:
-        market = state.get("market_status", {})
-        kospi_change = market.get("kospi_change_rate", 0.0)
-
-        if kospi_change <= -3.0:
-            return {
-                "verdict": "REJECTED",
-                "approved_weight": 0.0,
-                "rejection_reasons": [f"시장 패닉장 발생 (코스피 {kospi_change:.2f}% 급락)으로 신규 매수 전면 차단"],
-            }
-        return {}
-
-
-class PositionLimitRuleNode(BaseNode[RiskState, Dict[str, Any]]):
-    """[Rule 3] 종목(15%) 및 섹터(30%) 비중 한도 검증 노드"""
-
-    MAX_STOCK_WEIGHT = 0.15
-    MAX_SECTOR_WEIGHT = 0.30
-
-    async def process(self, state: RiskState) -> Dict[str, Any]:
-        if state.get("verdict") == "REJECTED":
-            return {}
-
-        proposed = state.get("proposed_weight", 0.15)
-        portfolio = state.get("current_portfolio", {})
-        current_sector = portfolio.get("sector_weight", 0.0)
-        reasons = list(state.get("rejection_reasons", []))
-
-        # 1. 단일 종목 한도 체크
-        allowed = min(proposed, self.MAX_STOCK_WEIGHT)
-
-        # 2. 섹터 비중 한도 체크
-        if current_sector + allowed > self.MAX_SECTOR_WEIGHT:
-            allowed = max(0.0, self.MAX_SECTOR_WEIGHT - current_sector)
-            reasons.append(f"섹터 한도(30%) 초과 방지를 위해 비중을 {allowed*100:.1f}%로 제한")
-
-        verdict = "APPROVED" if allowed == proposed else "ADJUSTED"
-        return {
+            "stock_name": stock_name,
+            "current_price": current_price,
+            "proposed_weight": base_recommended_weight,
+            "approved_weight": app_weight,
             "verdict": verdict,
-            "approved_weight": allowed,
-            "rejection_reasons": reasons,
-        }
-
-
-class StopLossRuleNode(BaseNode[RiskState, Dict[str, Any]]):
-    """[Rule 4] ATR 1.5배 기반 필수 동적 손절가 산출 및 최종 리포트 노드"""
-
-    async def process(self, state: RiskState) -> Dict[str, Any]:
-        ticker = state.get("ticker", "005930")
-        market = state.get("market_status", {})
-        current_price = market.get("current_price", 75000.0)
-        atr_14 = market.get("atr_14", 1500.0)
-
-        # 동적 손절가 수식: Entry Price - (ATR * 1.5)
-        stop_loss_price = round(current_price - (atr_14 * 1.5), 0)
-
-        verdict = state.get("verdict", "APPROVED")
-        approved_weight = state.get("approved_weight", 0.15)
-        reasons = state.get("rejection_reasons", [])
-        reasons_text = f" (조정 사유: {', '.join(reasons)})" if reasons else ""
-
-        report = (
-            f"🛡️ [{ticker}] 100% Rule-Based 리스크 관리 심의 결과\n"
-            f"- 최종 판정: [{verdict}]{reasons_text}\n"
-            f"- 승인 비중: {approved_weight*100:.1f}% (단일종목 한도: 최대 15.0%)\n"
-            f"- 산정 손절가: {stop_loss_price:,.0f}원 (진입가 대비 -{((current_price - stop_loss_price)/current_price)*100:.1f}%, ATR 1.5배 기준)\n"
-            f"- 유동성 검증: 20일 일평균 거래대금 450억 원 (유동성 합격 기준 50억 원 충족)"
-        )
-
-        return {
-            "stop_loss_price": stop_loss_price,
-            "output": report,
-            "messages": [AIMessage(content=report)],
+            "stop_loss_price": stop_loss,
+            "panic_status": panic_flag,
+            "reason": reason,
+            "output": report_text,
+            "messages": [AIMessage(content=report_text)],
         }
 
 
 def create_risk_graph():
     builder = StateGraph(RiskState)
-    builder.add_node("ingest", IngestProposalNode(name="ingest"))
-    builder.add_node("panic_check", MarketPanicRuleNode(name="panic_check"))
-    builder.add_node("limit_check", PositionLimitRuleNode(name="limit_check"))
-    builder.add_node("stop_loss", StopLossRuleNode(name="stop_loss"))
+    builder.add_node("evaluate_risk_llm", LLMRiskGatekeeperNode(name="evaluate_risk_llm"))
 
-    builder.add_edge(START, "ingest")
-    builder.add_edge("ingest", "panic_check")
-    builder.add_edge("panic_check", "limit_check")
-    builder.add_edge("limit_check", "stop_loss")
-    builder.add_edge("stop_loss", END)
+    builder.add_edge(START, "evaluate_risk_llm")
+    builder.add_edge("evaluate_risk_llm", END)
 
     return builder.compile()
 
@@ -160,7 +185,7 @@ def create_app():
     graph = create_risk_graph()
     agent = LangGraphAgent(
         name="risk_management_agent",
-        description="100% Rule-Based 포트폴리오 비중 한도, 동적 손절선 및 급락장 게이트키퍼 검증 에이전트",
+        description="LLM 및 PostgreSQL DB 실시간 시세 기반 포트폴리오 편입 비중 승인 및 필수 동적 손절선 확정 에이전트",
         graph=graph,
     )
     a2a_app = to_a2a(agent)
@@ -169,3 +194,4 @@ def create_app():
 
 
 app = create_app()
+

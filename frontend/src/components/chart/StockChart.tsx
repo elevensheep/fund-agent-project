@@ -12,6 +12,10 @@ interface StockChartProps {
   sma60?: SmaLineData[];
   ticker: string;
   stockName: string;
+  isLoading?: boolean;
+  isEmpty?: boolean;
+  timeframe?: "1D" | "1M" | "1W";
+  onTimeframeChange?: (tf: "1D" | "1M" | "1W") => void;
 }
 
 export const StockChart: React.FC<StockChartProps> = ({
@@ -20,6 +24,10 @@ export const StockChart: React.FC<StockChartProps> = ({
   sma60,
   ticker,
   stockName,
+  isLoading = false,
+  isEmpty = false,
+  timeframe: externalTimeframe,
+  onTimeframeChange,
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -35,13 +43,21 @@ export const StockChart: React.FC<StockChartProps> = ({
     close: number;
   } | null>(null);
 
-  const [timeframe, setTimeframe] = useState<"1D" | "1M" | "1W">("1D");
+  const [internalTimeframe, setInternalTimeframe] = useState<"1D" | "1M" | "1W">("1D");
+  const timeframe = externalTimeframe || internalTimeframe;
+  const setTimeframe = (tf: "1D" | "1M" | "1W") => {
+    if (onTimeframeChange) onTimeframeChange(tf);
+    else setInternalTimeframe(tf);
+  };
+
   const [showSma20, setShowSma20] = useState(true);
   const [showSma60, setShowSma60] = useState(true);
 
   // Latest bar summary
-  const latestBar = data.length > 0 ? data[data.length - 1] : null;
+  const latestBar = data && data.length > 0 ? data[data.length - 1] : null;
   const currentHover = hoverData || latestBar;
+
+  const hasData = data && data.length > 0 && !isEmpty;
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -51,6 +67,8 @@ export const StockChart: React.FC<StockChartProps> = ({
       chartRef.current.remove();
       chartRef.current = null;
     }
+
+    if (!hasData) return;
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
@@ -169,7 +187,7 @@ export const StockChart: React.FC<StockChartProps> = ({
       chart.remove();
       chartRef.current = null;
     };
-  }, [data, sma20, sma60, showSma20, showSma60, timeframe]);
+  }, [data, sma20, sma60, showSma20, showSma60, timeframe, hasData]);
 
   return (
     <div className="flex flex-col w-full rounded-2xl border border-slate-800/80 bg-slate-950/90 overflow-hidden shadow-lg backdrop-blur-md">
@@ -183,7 +201,7 @@ export const StockChart: React.FC<StockChartProps> = ({
           </div>
 
           {/* OHLC hover stats */}
-          {currentHover && (
+          {currentHover && hasData && (
             <div className="hidden lg:flex items-center gap-3 text-xs font-mono">
               <span className="text-slate-400">
                 시: <strong className="text-slate-200">{formatKRW(currentHover.open)}</strong>
@@ -211,26 +229,28 @@ export const StockChart: React.FC<StockChartProps> = ({
         {/* Controls */}
         <div className="flex items-center gap-2">
           {/* Moving average toggles */}
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px]">
-            <button
-              onClick={() => setShowSma20(!showSma20)}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition ${
-                showSma20 ? "text-yellow-400 font-semibold" : "text-slate-500 opacity-60"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-yellow-400" />
-              SMA 20
-            </button>
-            <button
-              onClick={() => setShowSma60(!showSma60)}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition ${
-                showSma60 ? "text-cyan-400 font-semibold" : "text-slate-500 opacity-60"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-cyan-400" />
-              SMA 60
-            </button>
-          </div>
+          {hasData && (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px]">
+              <button
+                onClick={() => setShowSma20(!showSma20)}
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition ${
+                  showSma20 ? "text-yellow-400 font-semibold" : "text-slate-500 opacity-60"
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-yellow-400" />
+                SMA 20
+              </button>
+              <button
+                onClick={() => setShowSma60(!showSma60)}
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition ${
+                  showSma60 ? "text-cyan-400 font-semibold" : "text-slate-500 opacity-60"
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                SMA 60
+              </button>
+            </div>
+          )}
 
           {/* Timeframe Buttons */}
           <div className="flex items-center rounded-md bg-slate-950 p-0.5 border border-slate-800 text-xs">
@@ -251,8 +271,29 @@ export const StockChart: React.FC<StockChartProps> = ({
         </div>
       </div>
 
-      {/* Chart Canvas */}
-      <div ref={chartContainerRef} className="w-full relative" />
+      {/* Chart Canvas or Empty/Loading State */}
+      {isLoading && !hasData ? (
+        <div className="flex flex-col items-center justify-center h-[380px] text-center p-6 bg-slate-950/80">
+          <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-3" />
+          <span className="text-xs text-slate-400 font-mono">실시간 캔들 데이터 로딩 중...</span>
+        </div>
+      ) : !hasData ? (
+        <div className="flex flex-col items-center justify-center h-[380px] text-center p-6 bg-slate-950/80">
+          <div className="p-3 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 mb-3 animate-pulse">
+            <BarChart3 className="w-7 h-7" />
+          </div>
+          <h4 className="text-sm font-bold text-slate-200 mb-1">📊 실시간 시세 데이터 수집 진행 중</h4>
+          <p className="text-xs text-slate-400 max-w-sm mb-3">
+            신규 등록된 종목으로, 실시간 틱/분봉 데이터가 축적되는 중입니다.
+          </p>
+          <div className="flex items-center gap-2 text-[11px] font-mono text-emerald-400 bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-900/60">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            Redis & PostgreSQL 실시간 수집 활성화됨
+          </div>
+        </div>
+      ) : (
+        <div ref={chartContainerRef} className="w-full relative" />
+      )}
     </div>
   );
 };

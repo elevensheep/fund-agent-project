@@ -1,21 +1,30 @@
+import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 from typing_extensions import TypedDict
 
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from google.adk.agents.langgraph_agent import LangGraphAgent
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from core.db_stock_tool import (
+    extract_ticker_from_text,
+    fetch_latest_stock_price,
+    get_fundamental_valuation,
+    get_stock_metadata,
+)
 from core.llm import get_chat_model
-from shared_core import BaseNode
+from shared_core import BaseNode, extract_json_from_llm_response, extract_text_from_llm_message
 from shared_core.logger import logger
-from agents.schemas.stock_schema import FundamentalAnalysisSchema
 
 
 class FundamentalState(TypedDict, total=False):
     ticker: str
+    stock_name: str
+    current_price: float
     financial_data: Dict[str, Any]
     valuation_metrics: Dict[str, Any]
     analysis_result: Dict[str, Any]
@@ -23,8 +32,8 @@ class FundamentalState(TypedDict, total=False):
     messages: List[Any]
 
 
-class FetchFinancialsNode(BaseNode[FundamentalState, Dict[str, Any]]):
-    """[Rule 1] 기업 재무제표 3표 및 실적 수집 노드"""
+class LLMAnalyzeFundamentalNode(BaseNode[FundamentalState, Dict[str, Any]]):
+    """[LLM + DB Tool] PostgreSQL DB 실시간 시세 기반 LLM 펀더멘털 재무제표 심층 분석 및 밸류에이션 산출"""
 
     async def process(self, state: FundamentalState) -> Dict[str, Any]:
         messages = state.get("messages", [])
@@ -33,101 +42,132 @@ class FetchFinancialsNode(BaseNode[FundamentalState, Dict[str, Any]]):
             last_msg = messages[-1]
             raw_text = getattr(last_msg, "content", str(last_msg))
 
-        ticker_match = re.search(r"\b\d{6}\b", str(raw_text))
-        ticker = ticker_match.group(0) if ticker_match else state.get("ticker", "005930")
+        ticker = extract_ticker_from_text(f"{raw_text} {state.get('ticker', '')}")
+        meta = get_stock_metadata(ticker or raw_text)
+        ticker = meta["ticker"]
+        stock_name = meta["name"]
+        market = meta.get("market", "KOSPI")
+        sector = meta.get("sector", "대표 우량기업")
 
-        # Mock Financial Data (3-Year Financial Statements)
-        financial_data = {
-            "ticker": ticker,
-            "revenue": 3020000,      # 매출액 (억원)
-            "operating_profit": 350000, # 영업이익 (억원)
-            "net_income": 310000,     # 당기순이익 (억원)
-            "total_assets": 4500000,  # 총자산 (억원)
-            "total_debt": 1200000,    # 총부채 (억원)
-            "total_equity": 3300000,  # 총자본 (억원)
-            "operating_cash_flow": 420000,
-            "capex": 280000,
-            "market_cap": 4800000,    # 시가총액 (억원)
-        }
-        return {"ticker": ticker, "financial_data": financial_data}
+        quote = fetch_latest_stock_price(ticker)
+        current_price = quote["price"]
 
+        # 공용 DB Tool에서 기초 참조치 산출 (LLM 폴백용 및 가이드)
+        db_fund = get_fundamental_valuation(ticker)
 
-class CalcValuationNode(BaseNode[FundamentalState, Dict[str, Any]]):
-    """[Rule 2] 밸류에이션 및 재무 비율 연산 노드 (환각 방지)"""
+        llm = get_chat_model()
 
-    async def process(self, state: FundamentalState) -> Dict[str, Any]:
-        fin = state.get("financial_data", {})
-        net_income = fin.get("net_income", 1)
-        total_equity = fin.get("total_equity", 1)
-        market_cap = fin.get("market_cap", 1)
-        total_debt = fin.get("total_debt", 0)
-        ocf = fin.get("operating_cash_flow", 0)
-        capex = fin.get("capex", 0)
-
-        per = round(market_cap / net_income, 2) if net_income > 0 else 999.0
-        pbr = round(market_cap / total_equity, 2) if total_equity > 0 else 999.0
-        roe = round((net_income / total_equity) * 100, 2) if total_equity > 0 else 0.0
-        debt_ratio = round((total_debt / total_equity) * 100, 2) if total_equity > 0 else 0.0
-        fcf = ocf - capex
-
-        # 기본 등급 산정
-        if roe >= 15 and per <= 15 and debt_ratio <= 100:
-            grade = "S"
-        elif roe >= 10 and per <= 20 and debt_ratio <= 150:
-            grade = "A"
-        elif roe >= 5:
-            grade = "B"
-        else:
-            grade = "C"
-
-        metrics = {
-            "per": per,
-            "pbr": pbr,
-            "roe": roe,
-            "debt_ratio": debt_ratio,
-            "fcf": fcf,
-            "grade": grade,
-        }
-        return {"valuation_metrics": metrics}
-
-
-class EvalModelAndFormatNode(BaseNode[FundamentalState, Dict[str, Any]]):
-    """[Rule/LLM 3] 적정가치 평가 및 최종 포맷팅 노드"""
-
-    async def process(self, state: FundamentalState) -> Dict[str, Any]:
-        ticker = state.get("ticker", "005930")
-        metrics = state.get("valuation_metrics", {})
-        grade = metrics.get("grade", "A")
-        per = metrics.get("per", 12.5)
-        pbr = metrics.get("pbr", 1.2)
-        roe = metrics.get("roe", 10.5)
-        debt = metrics.get("debt_ratio", 36.4)
-        fcf = metrics.get("fcf", 140000)
-
-        summary = (
-            f"📈 [{ticker}] 펀더멘털 및 밸류에이션 분석 리포트\n"
-            f"- 재무 등급: [{grade} 등급] (수익성 및 재무 안정성 우수)\n"
-            f"- 밸류에이션: PER {per:.1f}배 / PBR {pbr:.2f}배 (업종 평균 대비 저평가)\n"
-            f"- 수익성/안정성: ROE {roe:.1f}%, 부채비율 {debt:.1f}%\n"
-            f"- 잉여현금흐름(FCF): {fcf:,}억 원 (영업현금 창출력 견조)"
+        system_prompt = (
+            "당신은 여의도 제도권 대형 증권사 리서치센터의 수석 펀더멘털 밸류에이션 애널리스트입니다.\n"
+            f"주어진 기업({stock_name}, 티커: {ticker}, 소속시장: {market}, 업종: {sector})에 대해\n"
+            "실제 사업 모델, 최근 분기 실적 모멘텀, 영업이익률, 밸류에이션 멀티플(PER, PBR, ROE, 부채비율)을 전문적이고 현실적으로 심층 분석하여 리포트를 작성하십시오.\n\n"
+            "작성 가이드라인:\n"
+            f"1. 리포트 본문:\n"
+            f"📈 [{stock_name} ({ticker})] 펀더멘털 & 밸류에이션 심층 분석 리포트\n"
+            f"- 실시간 현재가: {current_price:,.0f}원 | 재무 평가 등급: [S / A / B / C 중 택1]\n"
+            f"- 적정가치 목표 밴드: [하단목표가]원 ~ [상단목표가]원 (상승 여력 +XX.X%)\n"
+            f"- 밸류에이션 멀티플: PER XX.X배 / PBR X.XX배 (업종 밸류에이션 대비 평가)\n"
+            f"- 재무 건전성: ROE XX.X%, 부채비율 XX.X%\n"
+            f"- 잉여현금흐름(FCF) 및 이익 가시성 (1~2문장)\n"
+            f"- 애널리스트 총평 (2~3문장)\n\n"
+            "2. 리포트 맨 마지막에 반드시 아래 JSON 블록을 정확한 수치로 포함하십시오 (JSON 외 다른 글자 없이):\n"
+            "```json\n"
+            "{\n"
+            '  "grade": "S" | "A" | "B" | "C",\n'
+            '  "per": <float>,\n'
+            '  "pbr": <float>,\n'
+            '  "roe": <float>,\n'
+            '  "debt_ratio": <float>,\n'
+            '  "target_price_low": <float>,\n'
+            '  "target_price_high": <float>,\n'
+            '  "upside_rate": <float>,\n'
+            '  "fcf_summary": "<string>"\n'
+            "}\n"
+            "```"
         )
 
+        user_prompt = (
+            f"종목명: {stock_name} (종목코드: {ticker}, 소속: {market})\n"
+            f"DB 현재가: {current_price:,.0f}원\n"
+            f"분석 요청: {raw_text or f'{stock_name} 펀더멘털 및 재무제표 밸류에이션 분석'}"
+        )
+
+        try:
+            resp = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+            report_text = extract_text_from_llm_message(resp.content)
+        except Exception as e:
+            logger.warning("fundamental_agent.llm_fallback", error=str(e))
+            t_low, t_high = db_fund["target_price_range"]
+            report_text = (
+                f"📈 [{stock_name} ({ticker})] 펀더멘털 & 밸류에이션 심층 분석 리포트\n"
+                f"- 실시간 현재가: {current_price:,.0f}원 | 재무 평가 등급: [{db_fund['grade']} 등급]\n"
+                f"- 적정가치 목표 밴드: {t_low:,.0f}원 ~ {t_high:,.0f}원 (상승 여력 +{db_fund['upside_rate']}%)\n"
+                f"- 밸류에이션 멀티플: PER {db_fund['per']:.1f}배 / PBR {db_fund['pbr']:.2f}배\n"
+                f"- 재무 건전성: ROE {db_fund['roe']:.1f}%, 부채비율 {db_fund['debt_ratio']:.1f}%\n"
+                f"- 애널리스트 총평: {sector} 분야 내 안정적인 영업 현금흐름과 성장성을 확보하고 있습니다.\n\n"
+                "```json\n"
+                + json.dumps({
+                    "grade": db_fund["grade"],
+                    "per": db_fund["per"],
+                    "pbr": db_fund["pbr"],
+                    "roe": db_fund["roe"],
+                    "debt_ratio": db_fund["debt_ratio"],
+                    "target_price_low": t_low,
+                    "target_price_high": t_high,
+                    "upside_rate": db_fund["upside_rate"],
+                    "fcf_summary": f"{db_fund['fcf']:,}원",
+                }, ensure_ascii=False, indent=2)
+                + "\n```"
+            )
+
+        # LLM 응답에서 구조화 JSON 추출
+        parsed_json = extract_json_from_llm_response(report_text) or {}
+        
+        per_val = float(parsed_json.get("per", db_fund["per"]))
+        pbr_val = float(parsed_json.get("pbr", db_fund["pbr"]))
+        roe_val = float(parsed_json.get("roe", db_fund["roe"]))
+        grade_val = str(parsed_json.get("grade", db_fund["grade"])).upper()
+        if grade_val not in ["S", "A", "B", "C", "D"]:
+            grade_val = db_fund["grade"]
+
+        t_low = float(parsed_json.get("target_price_low", db_fund["target_price_range"][0]))
+        t_high = float(parsed_json.get("target_price_high", db_fund["target_price_range"][1]))
+        if t_low <= 0 or t_high <= t_low:
+            t_low, t_high = db_fund["target_price_range"]
+
+        valuation_metrics = {
+            "ticker": ticker,
+            "stock_name": stock_name,
+            "current_price": current_price,
+            "grade": grade_val,
+            "per": per_val,
+            "pbr": pbr_val,
+            "roe": roe_val,
+            "debt_ratio": float(parsed_json.get("debt_ratio", db_fund["debt_ratio"])),
+            "target_price_range": [t_low, t_high],
+            "upside_rate": float(parsed_json.get("upside_rate", db_fund["upside_rate"])),
+            "fcf": db_fund["fcf"],
+        }
+
+        # JSON 코드 블록을 제거한 순수 마크다운 리포트
+        clean_report = re.sub(r"```(?:json)?\s*\{[\s\S]*?\}\s*```", "", report_text).strip()
+
         return {
-            "output": summary,
-            "messages": [AIMessage(content=summary)],
+            "ticker": ticker,
+            "stock_name": stock_name,
+            "current_price": current_price,
+            "valuation_metrics": valuation_metrics,
+            "output": clean_report,
+            "messages": [AIMessage(content=clean_report)],
         }
 
 
 def create_fundamental_graph():
     builder = StateGraph(FundamentalState)
-    builder.add_node("fetch_financials", FetchFinancialsNode(name="fetch_financials"))
-    builder.add_node("calc_valuation", CalcValuationNode(name="calc_valuation"))
-    builder.add_node("eval_and_format", EvalModelAndFormatNode(name="eval_and_format"))
+    builder.add_node("analyze_fundamental_llm", LLMAnalyzeFundamentalNode(name="analyze_fundamental_llm"))
 
-    builder.add_edge(START, "fetch_financials")
-    builder.add_edge("fetch_financials", "calc_valuation")
-    builder.add_edge("calc_valuation", "eval_and_format")
-    builder.add_edge("eval_and_format", END)
+    builder.add_edge(START, "analyze_fundamental_llm")
+    builder.add_edge("analyze_fundamental_llm", END)
 
     return builder.compile()
 
@@ -136,7 +176,7 @@ def create_app():
     graph = create_fundamental_graph()
     agent = LangGraphAgent(
         name="fundamental_agent",
-        description="기업 재무제표(3표), 밸류에이션(PER/PBR/ROE), 재무 등급 및 적정가치 분석 에이전트",
+        description="LLM 및 PostgreSQL DB 실데이터 기반 재무제표 밸류에이션 및 적정가치 목표 밴드 산출 에이전트",
         graph=graph,
     )
     a2a_app = to_a2a(agent)
@@ -145,3 +185,4 @@ def create_app():
 
 
 app = create_app()
+

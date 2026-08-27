@@ -40,3 +40,15 @@ async def get_supervisor_info(
     Supervisor Agent 상태 및 연결된 Remote A2A Agent 정보 반환
     """
     return await OrchestratorService.get_info(supervisor)
+
+
+@router.get("/recommend")
+async def get_stock_recommendation(
+    query: str = "지금 진입하기 좋은 AI 반도체 및 저평가 우량주 추천해줘",
+):
+    """
+    AI 종목 추천 파이프라인 (Top Picks 및 모델 포트폴리오 생성)
+    """
+    from agents.recommendation_agent import StockRecommendationAgent
+    return await StockRecommendationAgent.generate_recommendation(query)
+

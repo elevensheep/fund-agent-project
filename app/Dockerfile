@@ -8,7 +8,7 @@ COPY shared_core/ ./shared_core/
 
 WORKDIR /workspace/app
 RUN uv sync --frozen --no-dev --no-install-project
-ENV PYTHONPATH=/workspace/app
+ENV PYTHONPATH=/workspace/shared_core/src:/workspace/app
 
 # 애플리케이션 복사
 COPY app/ ./

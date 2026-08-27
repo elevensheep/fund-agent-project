@@ -10,7 +10,7 @@ WORKDIR /workspace/agent_server
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV UV_LINK_MODE=copy
 RUN uv sync --frozen --no-dev --no-install-project
-ENV PYTHONPATH=/workspace/agent_server
+ENV PYTHONPATH=/workspace/shared_core/src:/workspace/agent_server
 ENV PATH="/opt/venv/bin:$PATH"
 
 # 애플리케이션 복사

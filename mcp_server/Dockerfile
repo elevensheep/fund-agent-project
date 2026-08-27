@@ -8,6 +8,7 @@ COPY shared_core/ ./shared_core/
 
 WORKDIR /workspace/mcp_server
 RUN uv sync --frozen --no-dev --no-install-project
+ENV PYTHONPATH=/workspace/shared_core/src:/workspace/mcp_server
 
 # 애플리케이션 복사
 COPY mcp_server/ ./

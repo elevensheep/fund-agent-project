@@ -17,7 +17,7 @@ services:
       - agent_net
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.2-alpine
     container_name: agent_redis
     restart: unless-stopped
     ports:
@@ -36,6 +36,7 @@ services:
       - "28001:28001"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -59,6 +60,7 @@ services:
       - "28003:28003"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -79,6 +81,7 @@ services:
       - "28004:28004"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -100,6 +103,7 @@ services:
       - "28005:28005"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -121,6 +125,7 @@ services:
       - "28006:28006"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -141,6 +146,7 @@ services:
       - "28007:28007"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -161,6 +167,7 @@ services:
       - "28008:28008"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -181,6 +188,7 @@ services:
       - "28009:28009"
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
@@ -201,15 +209,18 @@ services:
     command: ["sh", "-c", "uv run python -m workers.stream_worker"]
     volumes:
       - .:/workspace/agent_server
+      - ../shared_core:/workspace/shared_core
     environment:
       - ENVIRONMENT=production
       - PYTHONIOENCODING=utf-8
       - PYTHONUTF8=1
       - POSTGRES_HOST=agent_postgres
+      - REDIS_HOST=agent_redis
     env_file:
       - ../.env
     depends_on:
       - postgres
+      - redis
     networks:
       - agent_net
 

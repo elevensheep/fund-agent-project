@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     db_max_overflow: int = 20
 
+    # Redis Settings
+    redis_host: str = "agent_redis"
+    redis_port: int = 6379
+
     # Korea Investment & Securities (KIS) API Settings
     kis_app_key: str = ""
     kis_app_secret: str = ""

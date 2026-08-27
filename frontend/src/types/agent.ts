@@ -11,6 +11,7 @@ export interface PlanStep {
 
 export interface ExecutionPlan {
   ticker: string;
+  stock_name?: string;
   query_intent: QueryIntent | string;
   steps: PlanStep[];
 }
@@ -63,6 +64,10 @@ export interface ValuationMetrics {
   roe: number;
   grade: "S" | "A" | "B" | "C" | "D";
   target_price_range: [number, number];
+  debt_ratio?: number;
+  upside_rate?: number;
+  fcf?: number;
+  fcf_summary?: string;
   eps?: number;
   bps?: number;
   dividend_yield?: number;
@@ -83,9 +88,9 @@ export interface TechnicalSignalResult {
   support_levels: number[];
   resistance_levels: number[];
   atr_14: number;
-  trend?: "UPTREND" | "DOWNTREND" | "SIDEWAYS";
+  trend?: "UPTREND" | "DOWNTREND" | "SIDEWAYS" | string;
   golden_cross?: boolean;
-  rsi_state?: "OVERSOLD" | "NEUTRAL" | "OVERBOUGHT";
+  rsi_state?: "OVERSOLD" | "NEUTRAL" | "OVERBOUGHT" | string;
 }
 
 export interface TechnicalResult {
@@ -96,15 +101,15 @@ export interface TechnicalResult {
 
 export interface DartDisclosureAnalysis {
   recent_disclosures_count: number;
-  dilution_risk: "HIGH" | "MEDIUM" | "LOW";
+  dilution_risk: "HIGH" | "MEDIUM" | "LOW" | string;
   overhang_warning: boolean;
-  overall_sentiment?: "POSITIVE_HIGH" | "NEUTRAL" | "NEGATIVE_HIGH";
+  overall_sentiment?: "POSITIVE_HIGH" | "POSITIVE_MODERATE" | "NEUTRAL" | "NEGATIVE_MODERATE" | "NEGATIVE_HIGH" | string;
   cb_bw_status?: string;
   latest_filings?: Array<{
     title: string;
     date: string;
     category: string;
-    impact: "POSITIVE" | "NEUTRAL" | "NEGATIVE";
+    impact: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | string;
   }>;
 }
 
@@ -118,9 +123,14 @@ export interface SectorData {
   sector_name: string;
   relative_strength_rank: number; // 1 to 20
   macro_score: number; // 0 to 100
+  sector_relative_strength?: number;
+  rs_description?: string;
+  fx_impact?: string;
+  rate_impact?: string;
+  outlook?: string;
   interest_rate_env?: string;
   fx_usd_krw?: number;
-  sector_momentum?: "LEADING" | "WEAKENING" | "IMPROVING" | "LAGGING";
+  sector_momentum?: "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "LEADING" | "WEAKENING" | "IMPROVING" | "LAGGING" | string;
 }
 
 export interface MacroSectorResult {
@@ -130,13 +140,15 @@ export interface MacroSectorResult {
 }
 
 export interface JudgeVerdict {
-  decision: "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL";
+  decision: "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL" | string;
   confidence_score: number; // 0 to 100
   bull_summary: string;
   bear_summary: string;
   bull_points?: string[];
   bear_points?: string[];
   core_conflict?: string;
+  target_price?: number;
+  stop_loss_price?: number;
 }
 
 export interface BullBearDebateResult {
@@ -145,7 +157,7 @@ export interface BullBearDebateResult {
   raw_output?: string;
 }
 
-export type RiskVerdict = "APPROVED" | "REJECTED" | "ADJUSTED";
+export type RiskVerdict = "APPROVED" | "REJECTED" | "ADJUSTED" | string;
 
 export interface RiskManagementResult {
   ticker: string;
@@ -171,6 +183,23 @@ export interface StepResults {
   [key: string]: any;
 }
 
+export interface ExecutiveMetrics {
+  current_price: number;
+  target_price_low: number;
+  target_price_high: number;
+  target_price_str: string;
+  stop_loss_price: number;
+  stop_loss_str: string;
+  approved_weight: number;
+  approved_weight_str: string;
+  confidence_score: number;
+  confidence_str: string;
+  financial_grade: string;
+  support_levels?: number[];
+  resistance_levels?: number[];
+  investment_opinion?: string;
+}
+
 export interface InvokeResponse {
   status?: "success" | "error";
   output: string;
@@ -178,12 +207,16 @@ export interface InvokeResponse {
   plan?: ExecutionPlan;
   remote_response?: string | Record<string, any>;
   step_results?: StepResults;
+  executive_metrics?: ExecutiveMetrics;
+  recommendation?: RecommendationResponse | null;
   session_id?: string;
   timestamp?: string;
   is_cached?: boolean;
   cached_at?: string;
   ttl_remaining?: number;
 }
+
+
 
 export interface CandleData {
   time: string;
@@ -228,3 +261,35 @@ export interface SupervisorInfo {
   remote_agents: Record<string, string>;
   agent_cards: Record<string, string | AgentCardInfo>;
 }
+
+export interface RecommendedStock {
+  rank: number;
+  ticker: string;
+  name: string;
+  current_price: number;
+  opinion: string;
+  target_price_range: [number, number];
+  target_price_str: string;
+  upside_percent: number;
+  buy_levels: [number, number];
+  stop_loss_price: number;
+  approved_weight: number;
+  financial_grade: string;
+  key_catalyst: string;
+}
+
+export interface PortfolioSummary {
+  total_equity_weight: number;
+  cash_reserve_weight: number;
+  expected_return: string;
+  risk_level: string;
+}
+
+export interface RecommendationResponse {
+  intent: string;
+  theme: string;
+  recommended_stocks: RecommendedStock[];
+  portfolio_summary: PortfolioSummary;
+  report_markdown: string;
+}
+

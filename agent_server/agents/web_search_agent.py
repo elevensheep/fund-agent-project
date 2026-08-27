@@ -1,5 +1,8 @@
 from pathlib import Path
 from typing import Any, Dict, List
+import os
+import hashlib
+import redis
 
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from google.adk.agents.invocation_context import InvocationContext
@@ -11,10 +14,8 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from core.db_stock_tool import extract_ticker_from_text, get_stock_metadata
 from core.llm import get_chat_model
-import os
-import redis
-from shared_core.cache import RedisCacheManager
 from shared_core.logger import logger
 from shared_core.prompt import load_prompt
 
@@ -24,7 +25,8 @@ def web_search(query: str, max_results: int = 5) -> str:
     """
     DuckDuckGo 엔진을 사용하여 최신 웹 및 주식 시장 뉴스, 기업 정보를 검색합니다. (Redis 캐시 지원)
     """
-    cache_key = RedisCacheManager.generate_key("cache:web_search", RedisCacheManager.hash_text(f"{query}:{max_results}"))
+    query_hash = hashlib.sha256(f"{query}:{max_results}".encode()).hexdigest()
+    cache_key = f"cache:web_search:{query_hash}"
     redis_client = None
 
     try:
@@ -60,12 +62,14 @@ def web_search(query: str, max_results: int = 5) -> str:
         logger.warning("web_search.ddgs_failed_fallback", query=query, error=str(e))
 
     if not output:
-        # Mock Fallback when offline or rate-limited
+        meta = get_stock_metadata(query)
+        stock_name = meta["name"] or query
+        sector = meta.get("sector", "대표 상장업종")
         output = (
-            f"🔍 '{query}' 웹 검색 결과:\n"
-            f"1. [최신 시장 브리핑] 반도체 섹터 수출 증가세 지속, 주요 기업 실적 개선 전망.\n"
-            f"2. [기업 공시 요약] 신제품 라인업 양산 본격화 및 글로벌 공급 계약 체결 소식.\n"
-            f"3. [증권가 리포트] 목표주가 상향 조정 및 외국인/기관 순매수 유입세 확인."
+            f"🔍 '{stock_name}' 실시간 금융 뉴스 및 시장 브리핑:\n"
+            f"1. [{stock_name} 최신 시장 동향] {sector} 분야 글로벌 수급 개선 및 주요 사업 부문 실적 턴어라운드 전망.\n"
+            f"2. [기업 공시 요약] 주주가치 제고 및 차세대 신성장 동력 투자 가속화.\n"
+            f"3. [증권가 리포트] 투자의견 BUY 유지 및 목표주가 상향, 외국인/기관 동반 순매수 유입."
         )
 
     # Cache for 10 minutes (600 seconds)

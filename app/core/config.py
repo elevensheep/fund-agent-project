@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     redis_cache_ttl_seconds: int = 300  # 5 minutes default
     enable_cache: bool = True
 
+    # PostgreSQL Database Configuration
+    postgres_host: str = "agent_postgres"
+    postgres_port: int = 5432
+    postgres_user: str = "postgres"
+    postgres_password: str = "postgres_secure_pw"
+    postgres_db: str = "agent_stock_db"
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
 
 
 @lru_cache

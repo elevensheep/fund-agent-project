@@ -35,6 +35,11 @@ async def lifespan(app: FastAPI):
 
     app.state.a2a_registry = settings.a2a_agents
 
+    # 4. KRX 전종목(KOSPI/KOSDAQ 2,600+ 기업) DB 시딩 검증 및 자동 적재
+    import asyncio
+    from shared_core.stock_seeder import ensure_krx_stock_master_seeded
+    asyncio.create_task(ensure_krx_stock_master_seeded())
+
     logger.info(
         "app.ready",
         supervisor=app.state.supervisor.name,

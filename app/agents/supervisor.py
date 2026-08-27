@@ -151,7 +151,7 @@ class SupervisorAgent(BaseAgent):
         sub_results = dispatch_res.get("sub_agent_results", {})
 
         # 3. 결과 종합 및 최종 리포트 작성
-        final_report = await self.synthesizer.synthesize(
+        final_report, executive_metrics, structured_results = await self.synthesizer.synthesize(
             ticker=plan.ticker,
             intent=plan.query_intent,
             sub_agent_results=sub_results,
@@ -161,12 +161,18 @@ class SupervisorAgent(BaseAgent):
         logger.info("task.supervisor.plan_and_execute.completed", used_agents=used_agents, output_len=len(final_report))
         logger.info("artifact.supervisor.output_created", output=final_report, used_agents=used_agents)
 
+        # structured_results가 있으면 구조화 데이터를 step_results로 사용, 없으면 원본 텍스트 사용
+        final_step_results = structured_results if structured_results else sub_results
+
         return {
             "output": final_report,
             "used_agents": used_agents,
             "plan": plan.model_dump(),
-            "remote_response": json.dumps(sub_results, ensure_ascii=False),
+            "step_results": final_step_results,
+            "executive_metrics": executive_metrics,
+            "remote_response": json.dumps(final_step_results, ensure_ascii=False),
         }
+
 
     async def astream(self, inputs: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         """Supervisor 최종 리포트 토큰 비동기 스트리밍"""

@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { ExecutionPlan, InvokeResponse, StepResults } from "@/types/agent";
-import { MOCK_RESPONSES } from "@/lib/mockData";
+import { ExecutionPlan, ExecutiveMetrics, InvokeResponse, RecommendationResponse, StepResults } from "@/types/agent";
 
 interface AgentState {
   ticker: string;
@@ -12,13 +11,14 @@ interface AgentState {
   completedAgents: string[];
   plan: ExecutionPlan | null;
   stepResults: StepResults;
+  executiveMetrics: ExecutiveMetrics | null;
+  recommendation: RecommendationResponse | null;
   finalReport: string;
   streamingTokens: string;
-  isMockMode: boolean;
   isCached: boolean;
   cachedAt: string | null;
   ttlRemaining: number | null;
-  activeTab: "dashboard" | "dag" | "report" | "monitoring";
+  activeTab: "dashboard" | "dag" | "report" | "recommendation" | "monitoring";
   isSystemStatusOpen: boolean;
   history: Array<{ ticker: string; name: string; query: string; timestamp: string }>;
 
@@ -32,50 +32,37 @@ interface AgentState {
   setPlan: (plan: ExecutionPlan | null) => void;
   setStepResults: (results: StepResults) => void;
   updateStepResult: (agentName: string, result: any) => void;
+  setExecutiveMetrics: (metrics: ExecutiveMetrics | null) => void;
+  setRecommendation: (rec: RecommendationResponse | null) => void;
   setFinalReport: (report: string) => void;
   appendStreamingToken: (token: string) => void;
-  setMockMode: (isMock: boolean) => void;
   setIsCached: (isCached: boolean, cachedAt?: string, ttl?: number) => void;
-  setActiveTab: (tab: "dashboard" | "dag" | "report" | "monitoring") => void;
+  setActiveTab: (tab: "dashboard" | "dag" | "report" | "recommendation" | "monitoring") => void;
   setIsSystemStatusOpen: (open: boolean) => void;
   resetAnalysis: () => void;
   loadResponse: (resp: InvokeResponse, stockName?: string) => void;
 }
 
-const defaultSamsung = MOCK_RESPONSES["005930"];
-
 export const useAgentStore = create<AgentState>((set) => ({
-  ticker: "005930",
-  stockName: "삼성전자",
-  query: "삼성전자(005930) 종합 분석 및 투자 심의해줘",
+  ticker: "",
+  stockName: "",
+  query: "",
   intent: "FULL_ANALYSIS",
   isAnalyzing: false,
-  currentStepId: 4,
-  completedAgents: [
-    "data_processing_agent",
-    "web_search_agent",
-    "fundamental_agent",
-    "technical_agent",
-    "dart_disclosure_agent",
-    "macro_sector_agent",
-    "bull_bear_debate_agent",
-    "risk_management_agent",
-  ],
-  plan: defaultSamsung.plan || null,
-  stepResults: defaultSamsung.step_results || {},
-  finalReport: defaultSamsung.output,
+  currentStepId: 0,
+  completedAgents: [],
+  plan: null,
+  stepResults: {},
+  executiveMetrics: null,
+  recommendation: null,
+  finalReport: "",
   streamingTokens: "",
-  isMockMode: false,
   isCached: false,
   cachedAt: null,
   ttlRemaining: null,
   activeTab: "dashboard",
   isSystemStatusOpen: false,
-  history: [
-    { ticker: "005930", name: "삼성전자", query: "삼성전자 종합 분석", timestamp: "방금 전" },
-    { ticker: "000660", name: "SK하이닉스", query: "SK하이닉스 HBM 분석", timestamp: "1시간 전" },
-    { ticker: "005380", name: "현대차", query: "현대차 밸류에이션", timestamp: "어제" },
-  ],
+  history: [],
 
   setQuery: (query) => set({ query }),
   setStock: (ticker, stockName) => set({ ticker, stockName }),
@@ -94,10 +81,13 @@ export const useAgentStore = create<AgentState>((set) => ({
     set((state) => ({
       stepResults: { ...state.stepResults, [agentName]: result },
     })),
+  setExecutiveMetrics: (executiveMetrics) => set({ executiveMetrics }),
+  setRecommendation: (recommendation) => set({ recommendation }),
   setFinalReport: (finalReport) => set({ finalReport }),
   appendStreamingToken: (token) =>
-    set((state) => ({ streamingTokens: state.streamingTokens + token })),
-  setMockMode: (isMockMode) => set({ isMockMode }),
+    set((state) => ({
+      streamingTokens: state.streamingTokens + token,
+    })),
   setIsCached: (isCached, cachedAt, ttlRemaining) =>
     set({ isCached, cachedAt: cachedAt || null, ttlRemaining: ttlRemaining || null }),
   setActiveTab: (activeTab) => set({ activeTab }),
@@ -109,6 +99,8 @@ export const useAgentStore = create<AgentState>((set) => ({
       currentStepId: 1,
       completedAgents: [],
       stepResults: {},
+      executiveMetrics: null,
+      recommendation: null,
       finalReport: "",
       streamingTokens: "",
       isCached: false,
@@ -117,34 +109,40 @@ export const useAgentStore = create<AgentState>((set) => ({
     }),
 
   loadResponse: (resp, stockName) =>
-    set((state) => ({
-      isAnalyzing: false,
-      currentStepId: 4,
-      isCached: Boolean(resp.is_cached),
-      cachedAt: resp.cached_at || null,
-      ttlRemaining: resp.ttl_remaining || null,
-      plan: resp.plan || state.plan,
-      stepResults: resp.step_results || state.stepResults,
-      finalReport: resp.output,
-      completedAgents: resp.used_agents || [
-        "data_processing_agent",
-        "web_search_agent",
-        "fundamental_agent",
-        "technical_agent",
-        "dart_disclosure_agent",
-        "macro_sector_agent",
-        "bull_bear_debate_agent",
-        "risk_management_agent",
-      ],
-      stockName: stockName || state.stockName,
-      history: [
-        {
-          ticker: resp.plan?.ticker || state.ticker,
-          name: stockName || state.stockName,
-          query: state.query,
-          timestamp: "방금 전",
-        },
-        ...state.history.slice(0, 4),
-      ],
-    })),
+    set((state) => {
+      const isRec = Boolean(resp.recommendation);
+      return {
+        isAnalyzing: false,
+        currentStepId: 4,
+        isCached: Boolean(resp.is_cached),
+        cachedAt: resp.cached_at || null,
+        ttlRemaining: resp.ttl_remaining || null,
+        plan: resp.plan || state.plan,
+        stepResults: resp.step_results || state.stepResults,
+        executiveMetrics: resp.executive_metrics || state.executiveMetrics,
+        recommendation: resp.recommendation || null,
+        activeTab: isRec ? "recommendation" : state.activeTab,
+        finalReport: resp.output,
+        completedAgents: resp.used_agents || [
+          "data_processing_agent",
+          "web_search_agent",
+          "fundamental_agent",
+          "technical_agent",
+          "dart_disclosure_agent",
+          "macro_sector_agent",
+          "bull_bear_debate_agent",
+          "risk_management_agent",
+        ],
+        stockName: stockName || state.stockName,
+        history: [
+          {
+            ticker: resp.plan?.ticker || state.ticker,
+            name: stockName || state.stockName,
+            query: state.query,
+            timestamp: "방금 전",
+          },
+          ...state.history.slice(0, 4),
+        ],
+      };
+    }),
 }));

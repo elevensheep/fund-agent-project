@@ -1,34 +1,154 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentStore } from "@/stores/useAgentStore";
 import { useAgentStream } from "@/hooks/useAgentStream";
-import { POPULAR_STOCKS } from "@/lib/mockData";
-import { formatKRW, formatPercent } from "@/lib/formatters";
-import { ArrowRight, Flame, Layers, Search, Sparkles, X } from "lucide-react";
+import { ArrowRight, Database, Search, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
+interface SearchResultItem {
+  ticker: string;
+  name: string;
+  market: "KOSPI" | "KOSDAQ" | string;
+  sector?: string;
+  default_price?: number;
+}
+
 export const SearchBar: React.FC = () => {
-  const { query, setQuery, isAnalyzing, ticker, stockName, isCached, cachedAt, ttlRemaining } = useAgentStore();
+  const {
+    query,
+    setQuery,
+    setStock,
+    isAnalyzing,
+    ticker,
+    isCached,
+    ttlRemaining,
+  } = useAgentStore();
   const { startAnalysis } = useAgentStream();
-  const [inputValue, setInputValue] = useState(query);
+
+  const [inputValue, setInputValue] = useState("");
+  const [suggestions, setSuggestions] = useState<SearchResultItem[]>([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  // Orchestrator backend stock search API debounced call
+  const performSearch = useCallback(async (text: string) => {
+    if (!text.trim()) {
+      setSuggestions([]);
+      setIsOpen(false);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const res = await fetch(`/api/stock/search?query=${encodeURIComponent(text.trim())}&limit=10`);
+      if (res.ok) {
+        const data: SearchResultItem[] = await res.json();
+        setSuggestions(data);
+        setIsOpen(data.length > 0);
+      } else {
+        setSuggestions([]);
+      }
+    } catch (err) {
+      console.error("Stock search failed:", err);
+      setSuggestions([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
+
+  const handleInputChange = (value: string) => {
+    setInputValue(value);
+    setHighlightIdx(-1);
+
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+
+    if (value.trim().length >= 1) {
+      debounceTimeoutRef.current = setTimeout(() => {
+        performSearch(value);
+      }, 150);
+    } else {
+      setSuggestions([]);
+      setIsOpen(false);
+    }
+  };
+
+  const selectStock = useCallback(
+    async (stock: SearchResultItem) => {
+      const newQuery = `${stock.name}(${stock.ticker}) 종합 분석 및 투자 심의해줘`;
+      setInputValue(stock.name);
+      setQuery(newQuery);
+      setStock(stock.ticker, stock.name);
+      setIsOpen(false);
+      setSuggestions([]);
+
+      // 1. Register to DB stock_watchlist (triggers stream_worker live polling on-demand)
+      try {
+        await fetch("/api/stock/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker: stock.ticker, name: stock.name }),
+        });
+      } catch (e) {
+        console.warn("Watchlist add error:", e);
+      }
+
+      // 2. Start full 4-stage multi-agent analysis
+      startAnalysis(newQuery);
+    },
+    [setQuery, setStock, startAnalysis]
+  );
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!isOpen) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (highlightIdx >= 0 && suggestions[highlightIdx]) {
+        selectStock(suggestions[highlightIdx]);
+      } else if (suggestions.length > 0) {
+        selectStock(suggestions[0]);
+      } else {
+        handleSubmit(undefined, false);
+      }
+    } else if (e.key === "Escape") {
+      setIsOpen(false);
+    }
+  };
 
   const handleSubmit = (e?: React.FormEvent, forceRefresh: boolean = false) => {
     if (e) e.preventDefault();
-    if (!inputValue.trim() || isAnalyzing) return;
-    setQuery(inputValue);
-    startAnalysis(inputValue, forceRefresh);
-  };
-
-  const handleSelectStock = (stockTicker: string, name: string) => {
-    const newQuery = `${name}(${stockTicker}) 종합 분석 및 투자 심의해줘`;
-    setInputValue(newQuery);
-    setQuery(newQuery);
-    startAnalysis(newQuery);
+    const trimmed = inputValue.trim();
+    if (!trimmed) return;
+    setQuery(trimmed);
+    startAnalysis(trimmed, forceRefresh);
+    setIsOpen(false);
   };
 
   return (
-    <div className="w-full flex flex-col gap-3">
+    <div className="w-full flex flex-col gap-3" ref={containerRef}>
       {/* Search Input Bar */}
       <form onSubmit={(e) => handleSubmit(e, false)} className="relative w-full">
         <div className="relative flex items-center w-full rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
@@ -39,16 +159,24 @@ export const SearchBar: React.FC = () => {
           <input
             type="text"
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder="종목명 또는 6자리 종목코드 입력 (예: 삼성전자, 000660, 현대차 투자 심의해줘)"
+            onChange={(e) => handleInputChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (suggestions.length > 0) setIsOpen(true);
+            }}
+            placeholder="오케스트레이터 실시간 종목 검색 (예: 한화에어로스페이스, 카카오, 005930…)"
             className="w-full h-14 pl-3 pr-44 bg-transparent text-sm md:text-base text-slate-100 placeholder-slate-500 focus:outline-none"
-            disabled={isAnalyzing}
+            autoComplete="off"
           />
 
-          {inputValue && !isAnalyzing && (
+          {inputValue && (
             <button
               type="button"
-              onClick={() => setInputValue("")}
+              onClick={() => {
+                setInputValue("");
+                setSuggestions([]);
+                setIsOpen(false);
+              }}
               className="p-1 mr-2 text-slate-500 hover:text-slate-300 rounded-md transition"
             >
               <X className="w-4 h-4" />
@@ -56,7 +184,7 @@ export const SearchBar: React.FC = () => {
           )}
 
           <div className="absolute right-2 flex items-center gap-1.5">
-            {isCached && !isAnalyzing && (
+            {isCached && (
               <button
                 type="button"
                 onClick={() => handleSubmit(undefined, true)}
@@ -72,18 +200,71 @@ export const SearchBar: React.FC = () => {
               type="submit"
               variant="primary"
               size="md"
-              isLoading={isAnalyzing}
-              disabled={!inputValue.trim() || isAnalyzing}
+              disabled={!inputValue.trim()}
               className="gap-2 px-5 font-bold text-xs md:text-sm"
             >
               <Sparkles className="w-4 h-4" />
-              {isAnalyzing ? "분석 중" : "분석 시작"}
+              {isAnalyzing && !inputValue.trim() ? "분석 중..." : "분석 시작"}
             </Button>
           </div>
         </div>
+
+        {/* Autocomplete Dropdown backed by Orchestrator Stock Search */}
+        {isOpen && suggestions.length > 0 && (
+          <div className="absolute z-50 top-full mt-1 w-full rounded-xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-1.5 text-[10px] text-slate-500 border-b border-slate-800 font-medium">
+              <span className="flex items-center gap-1 text-blue-400">
+                <Database className="w-3 h-3" />
+                오케스트레이터 DB 검색 결과 ({suggestions.length}건)
+              </span>
+              <span>선택 시 실시간 시세 수집 및 4단계 분석 시작</span>
+            </div>
+            <ul className="max-h-60 overflow-y-auto">
+              {suggestions.map((stock, idx) => (
+                <li key={stock.ticker}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectStock(stock);
+                    }}
+                    className={`w-full flex items-center justify-between px-4 py-2.5 text-sm hover:bg-slate-800 transition-colors ${
+                      idx === highlightIdx ? "bg-slate-800" : ""
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-700 flex items-center justify-center font-bold text-xs text-white flex-shrink-0">
+                        {stock.name.slice(0, 1)}
+                      </div>
+                      <div className="text-left">
+                        <p className="font-semibold text-slate-100">{stock.name}</p>
+                        {stock.sector && (
+                          <p className="text-[11px] text-slate-500">{stock.sector}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-right">
+                      <span className="text-xs font-mono text-slate-400">{stock.ticker}</span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          stock.market === "KOSPI"
+                            ? "bg-blue-900/50 text-blue-300"
+                            : "bg-emerald-900/50 text-emerald-300"
+                        }`}
+                      >
+                        {stock.market || "KOSPI"}
+                      </span>
+                      <ArrowRight className="w-3.5 h-3.5 text-slate-600" />
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </form>
 
-      {/* Cache Status Banner if cached */}
+      {/* Cache Status Banner */}
       {isCached && (
         <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-amber-950/40 border border-amber-800/50 text-amber-300 text-xs">
           <div className="flex items-center gap-2">
@@ -93,13 +274,12 @@ export const SearchBar: React.FC = () => {
             </span>
             <span className="font-semibold">⚡ Redis 고속 캐시 적용됨</span>
             <span className="text-amber-400/80 text-[11px] hidden sm:inline">
-              (동일 종목 최근 분석 결과가 캐시에서 즉시 로드되었습니다{ttlRemaining ? ` • 잔여 TTL: ${ttlRemaining}초` : ""})
+              (동일 종목 최근 분석 결과 캐시 로드{ttlRemaining ? ` • 잔여 TTL: ${ttlRemaining}초` : ""})
             </span>
           </div>
           <button
             type="button"
             onClick={() => handleSubmit(undefined, true)}
-            disabled={isAnalyzing}
             className="font-bold underline text-amber-200 hover:text-white transition text-xs flex items-center gap-1"
           >
             실시간 갱신하기 →
@@ -107,41 +287,15 @@ export const SearchBar: React.FC = () => {
         </div>
       )}
 
-      {/* Popular Stock Pills */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
-        <div className="flex items-center gap-1 text-slate-400 font-medium whitespace-nowrap pl-1 pr-2">
-          <Flame className="w-3.5 h-3.5 text-rose-500" />
-          <span>실시간 인기 종목:</span>
+      {/* Selected stock pill */}
+      {ticker && (
+        <div className="flex items-center gap-2 text-xs text-slate-500 pl-1">
+          <span>현재 분석 종목:</span>
+          <span className="px-2 py-0.5 rounded-full bg-blue-900/40 border border-blue-700/50 text-blue-300 font-semibold">
+            {useAgentStore.getState().stockName} ({ticker})
+          </span>
         </div>
-
-        {POPULAR_STOCKS.map((stock) => {
-          const isSelected = stock.ticker === ticker;
-          const isUp = stock.change >= 0;
-
-          return (
-            <button
-              key={stock.ticker}
-              type="button"
-              onClick={() => handleSelectStock(stock.ticker, stock.name)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all whitespace-nowrap ${
-                isSelected
-                  ? "bg-blue-950/80 border-blue-500/80 text-blue-200 ring-1 ring-blue-500/40 shadow-sm"
-                  : "bg-slate-900/60 hover:bg-slate-800 border-slate-800/80 text-slate-300"
-              }`}
-            >
-              <span className="font-semibold text-slate-200">{stock.name}</span>
-              <span className="font-mono text-slate-400 text-[11px]">{formatKRW(stock.price)}</span>
-              <span
-                className={`font-mono text-[11px] font-bold ${
-                  isUp ? "text-rose-400" : "text-blue-400"
-                }`}
-              >
-                {formatPercent(stock.changePercent, { includeSign: true, decimals: 1 })}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      )}
     </div>
   );
 };

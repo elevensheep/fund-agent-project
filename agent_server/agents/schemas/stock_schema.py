@@ -61,8 +61,8 @@ class BullBearDebateSchema(BaseModel):
     bear_thesis: List[str] = Field(default_factory=list, description="하락론자(Bear) 주요 리스크 지적 목록")
     judge_verdict: str = Field(default="BUY", description="판사 최종 판정 (STRONG_BUY, BUY, HOLD, SELL, STRONG_SELL)")
     confidence_score: int = Field(default=80, description="판사 판정 확신도 (1 ~ 100%)")
-    target_price: float = Field(default=85000.0, description="목표 주가")
-    stop_loss_price: float = Field(default=71000.0, description="권고 손절가")
+    target_price: float = Field(default=0.0, description="목표 주가")
+    stop_loss_price: float = Field(default=0.0, description="권고 손절가")
     debate_summary: str = Field(default="", description="Bull vs Bear 토론 및 판사 최종 종합 의견")
 
 
@@ -71,7 +71,8 @@ class RiskManagementSchema(BaseModel):
     proposed_weight: float = Field(default=0.15, description="제안된 포트폴리오 편입 비중")
     approved_weight: float = Field(default=0.15, description="최종 승인된 포트폴리오 편입 비중")
     verdict: str = Field(default="APPROVED", description="리스크 심의 결과 (APPROVED, ADJUSTED, REJECTED)")
-    stop_loss_price: float = Field(default=71800.0, description="100% Rule 기반 산정된 필수 손절가")
+    stop_loss_price: float = Field(default=0.0, description="100% Rule 기반 산정된 필수 손절가")
     panic_status: bool = Field(default=False, description="시장 패닉/급락장 발동 여부")
     rejection_reasons: List[str] = Field(default_factory=list, description="비중 축소 또는 반려 사유 목록")
     summary: str = Field(default="", description="리스크 관리 종합 심의 의견")
+

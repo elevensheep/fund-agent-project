@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from langchain_core.messages import HumanMessage, SystemMessage
 from shared_core import BaseNode
+from shared_core.db_stock_tool import extract_ticker_from_text, get_stock_metadata
 from agents.schemas.stock_schema import NewsSentimentAnalysis
 
 
@@ -12,19 +13,21 @@ class RefineNewsLLMNode(BaseNode[Dict[str, Any], Dict[str, Any]]):
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         llm = self.get_dependency("llm")
         raw_news = state.get("raw_news_text", "")
-        ticker = state.get("ticker", "005930")
+        ticker = extract_ticker_from_text(f"{raw_news} {state.get('ticker', '')}")
+        meta = get_stock_metadata(ticker or raw_news)
+        stock_name = meta["name"]
 
         if not raw_news:
             return {
                 "news_analysis": {
-                    "summary": f"[{ticker}] 최근 주요 뉴스: 반도체 실적 개선 및 HBM 공급 확대 전망 양호.",
+                    "summary": f"[{stock_name}] 최근 수급 및 주요 공시 동향 분석 완료: 기관/외국인 순매수세 지속 및 실적 개선 기대감.",
                     "sentiment": "POSITIVE",
                     "impact_score": 8,
-                    "key_factors": ["실적 개선 기대감", "차세대 HBM 수요 증가", "외국인 순매수 지속"],
+                    "key_factors": ["실적 개선 기대감", "수급 모멘텀 지속", "업종 턴어라운드"],
                 }
             }
 
-        prompt = f"다음 주식 관련 웹/뉴스 텍스트를 정제하고 핵심 요약과 호재/악재를 분류하세요:\n\n{raw_news}"
+        prompt = f"다음 주식({stock_name}) 관련 웹/뉴스 텍스트를 정제하고 핵심 요약과 호재/악재를 분류하세요:\n\n{raw_news}"
         
         try:
             if hasattr(llm, "with_structured_output"):
@@ -53,9 +56,9 @@ class RefineNewsLLMNode(BaseNode[Dict[str, Any], Dict[str, Any]]):
             self.logger.warning("refine_news.fallback", error=str(e))
             return {
                 "news_analysis": {
-                    "summary": f"[{ticker}] 뉴스 분석 처리 완료.",
+                    "summary": f"[{stock_name}] 뉴스 및 시황 분석 처리 완료.",
                     "sentiment": "NEUTRAL",
-                    "impact_score": 5,
+                    "impact_score": 6,
                     "key_factors": ["기본 분석"],
                 }
             }

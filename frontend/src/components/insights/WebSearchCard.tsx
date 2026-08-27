@@ -2,6 +2,7 @@
 
 import React from "react";
 import { WebSearchResult } from "@/types/agent";
+import { cleanDisplayText } from "@/lib/utils";
 import { ExternalLink, Globe2, Search } from "lucide-react";
 
 interface WebSearchCardProps {
@@ -12,22 +13,9 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ data }) => {
   if (!data) return null;
 
   const isStructured = typeof data === "object" && "sources" in data;
-  const search = isStructured
-    ? data
-    : {
-        query: "실시간 웹 검색",
-        summary: "반도체 HBM 수요 확대 및 대형 IT 중심 외국인 순매수 지속",
-        sources: [
-          {
-            title: "HBM3E 양산 돌입 및 글로벌 공급망 협의",
-            url: "#",
-            snippet: "삼성전자가 차세대 HBM 양산을 본격화하며 실적 개선 기대감을 키우고 있다.",
-            date: "2026-08-26",
-          },
-        ],
-      };
-
-  const rawText = typeof data === "string" ? data : data.summary || data.raw_output;
+  const search = isStructured ? data : null;
+  const rawText = typeof data === "string" ? data : (data.summary || data.raw_output || "");
+  const displayText = cleanDisplayText(rawText);
 
   return (
     <div className="flex flex-col justify-between p-5 rounded-2xl border border-slate-800/90 bg-slate-950/80 shadow-md backdrop-blur-md">
@@ -48,14 +36,16 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ data }) => {
           </span>
         </div>
 
-        <p className="text-xs text-slate-200 leading-relaxed my-2 bg-slate-900/60 p-3 rounded-xl border border-slate-800/60">
-          {search.summary || rawText}
-        </p>
+        {displayText && (
+          <div className="text-xs text-slate-200 leading-relaxed my-2 bg-slate-900/60 p-3 rounded-xl border border-slate-800/60 whitespace-pre-line">
+            {displayText}
+          </div>
+        )}
 
-        {/* Source Citations */}
-        {search.sources && search.sources.length > 0 && (
+        {/* Source Citations (실제 소스가 있을 때만 렌더링) */}
+        {search && search.sources && search.sources.length > 0 && (
           <div className="space-y-1.5 mt-2">
-            {search.sources.slice(0, 2).map((s, idx) => (
+            {search.sources.slice(0, 3).map((s, idx) => (
               <a
                 key={idx}
                 href={s.url}

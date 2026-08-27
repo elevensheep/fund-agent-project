@@ -15,18 +15,19 @@ import {
   Server,
   Shield,
   Sparkles,
+  FileText as FileTextIcon,
 } from "lucide-react";
+
 import { Switch } from "@/components/ui/Switch";
 import { Button } from "@/components/ui/Button";
 
 export const Header: React.FC = () => {
   const {
-    isMockMode,
-    setMockMode,
     activeTab,
     setActiveTab,
     setIsSystemStatusOpen,
   } = useAgentStore();
+
 
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
@@ -94,6 +95,19 @@ export const Header: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setActiveTab("recommendation")}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+              activeTab === "recommendation"
+                ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-sm"
+                : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/50"
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            AI 종목 추천
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab("report")}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
               activeTab === "report"
@@ -101,9 +115,10 @@ export const Header: React.FC = () => {
                 : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/50"
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <FileTextIcon className="w-3.5 h-3.5" />
             최종 리포트
           </button>
+
 
           <button
             type="button"
@@ -135,17 +150,12 @@ export const Header: React.FC = () => {
               }`}
             />
             <span className="hidden sm:inline text-[11px] font-medium text-slate-300">
-              {backendOnline === false ? "오프라인 (Mock 모드)" : "8 에이전트 가동중"}
+              {backendOnline === false ? "서버 오프라인" : "8 에이전트 가동중"}
             </span>
           </button>
-
-          {/* Mock Toggle */}
-          <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-slate-900/90 border border-slate-800 text-xs">
-            <span className="text-[11px] text-slate-400">Mock 시뮬레이션</span>
-            <Switch checked={isMockMode} onCheckedChange={setMockMode} />
-          </div>
         </div>
       </div>
     </header>
   );
 };
+

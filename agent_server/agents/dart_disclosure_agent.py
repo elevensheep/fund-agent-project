@@ -1,28 +1,38 @@
+import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 from typing_extensions import TypedDict
 
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from google.adk.agents.langgraph_agent import LangGraphAgent
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from shared_core import BaseNode
+from core.db_stock_tool import (
+    extract_ticker_from_text,
+    fetch_latest_stock_price,
+    get_dart_disclosure_analysis,
+    get_stock_metadata,
+)
+from core.llm import get_chat_model
+from shared_core import BaseNode, extract_json_from_llm_response, extract_text_from_llm_message
 from shared_core.logger import logger
-from agents.schemas.stock_schema import DartDisclosureSchema
 
 
 class DartState(TypedDict, total=False):
     ticker: str
-    raw_disclosures: List[Dict[str, Any]]
+    stock_name: str
+    current_price: float
+    raw_query: str
     disclosure_analysis: Dict[str, Any]
     output: str
     messages: List[Any]
 
 
-class FetchDartDisclosuresNode(BaseNode[DartState, Dict[str, Any]]):
-    """[Rule 1] DART 전자공시 데이터 수집 및 핵심 이벤트 필터링 노드"""
+class LLMAnalyzeDisclosureNode(BaseNode[DartState, Dict[str, Any]]):
+    """[LLM + DB Tool] PostgreSQL DB 실시간 시세 및 금융감독원 DART 전자공시 & 오버행 리스크 LLM 심층 분석"""
 
     async def process(self, state: DartState) -> Dict[str, Any]:
         messages = state.get("messages", [])
@@ -31,84 +41,128 @@ class FetchDartDisclosuresNode(BaseNode[DartState, Dict[str, Any]]):
             last_msg = messages[-1]
             raw_text = getattr(last_msg, "content", str(last_msg))
 
-        ticker_match = re.search(r"\b\d{6}\b", str(raw_text))
-        ticker = ticker_match.group(0) if ticker_match else state.get("ticker", "005930")
+        ticker = extract_ticker_from_text(f"{raw_text} {state.get('ticker', '')}")
+        meta = get_stock_metadata(ticker or raw_text)
+        ticker = meta["ticker"]
+        stock_name = meta["name"]
+        market = meta.get("market", "KOSPI")
+        sector = meta.get("sector", "대표 우량기업")
 
-        # Mock DART Disclosures (최근 주요 공시 목록)
-        disclosures = [
-            {"date": "2026-08-15", "title": "단일판매·공급계약체결(자율공시)", "category": "영업활동", "impact": "POSITIVE_MODERATE"},
-            {"date": "2026-08-01", "title": "분기보고서(2026.06)", "category": "정기공시", "impact": "NEUTRAL"},
-            {"date": "2026-07-20", "title": "자기주식취득신탁계약체결결정", "category": "주주환원", "impact": "POSITIVE_HIGH"},
-        ]
+        quote = fetch_latest_stock_price(ticker)
+        current_price = quote["price"]
 
-        return {"ticker": ticker, "raw_disclosures": disclosures}
+        # 공용 DB Tool에서 기초 참조치 산출 (LLM 폴백용 및 가이드)
+        db_dart = get_dart_disclosure_analysis(ticker)
 
+        llm = get_chat_model()
 
-class AnalyzeDisclosuresNode(BaseNode[DartState, Dict[str, Any]]):
-    """[Rule 2] 공시 영향도 및 오버행/희석률 평가 노드"""
-
-    async def process(self, state: DartState) -> Dict[str, Any]:
-        disclosures = state.get("raw_disclosures", [])
-        
-        # 오버행 위험도 및 주주가치 영향 평가
-        has_buyback = any("자기주식" in d.get("title", "") for d in disclosures)
-        has_cb_bw = any("전환사채" in d.get("title", "") or "신주인수권" in d.get("title", "") for d in disclosures)
-
-        if has_cb_bw:
-            overhang_risk = "MEDIUM"
-            dilution_rate = 3.5
-            impact_grade = "NEGATIVE_MODERATE"
-        elif has_buyback:
-            overhang_risk = "LOW"
-            dilution_rate = 0.0
-            impact_grade = "POSITIVE_HIGH"
-        else:
-            overhang_risk = "NONE"
-            dilution_rate = 0.0
-            impact_grade = "NEUTRAL"
-
-        analysis = {
-            "overhang_risk": overhang_risk,
-            "dilution_rate": dilution_rate,
-            "impact_grade": impact_grade,
-            "disclosure_count": len(disclosures),
-        }
-        return {"disclosure_analysis": analysis}
-
-
-class FormatDartReportNode(BaseNode[DartState, Dict[str, Any]]):
-    """[Rule 3] DART 공시 분석 리포트 생성 노드"""
-
-    async def process(self, state: DartState) -> Dict[str, Any]:
-        ticker = state.get("ticker", "005930")
-        analysis = state.get("disclosure_analysis", {})
-        impact = analysis.get("impact_grade", "POSITIVE_HIGH")
-        overhang = analysis.get("overhang_risk", "LOW")
-        count = analysis.get("disclosure_count", 3)
-
-        report = (
-            f"📑 [{ticker}] DART 전자공시 및 이벤트 분석 리포트\n"
-            f"- 공시 종합 평가: [{impact}] (주주환원 및 공급계약 중심 호재성 공시)\n"
-            f"- 오버행(잠재 매도물량) 리스크: [{overhang}] (CB/BW 전환 부담 없음, 자사주 매입 효과 기대)\n"
-            f"- 최근 30일 공시 건수: 총 {count}건 (분기 실적보고 및 자사주 신탁 체결 포함)"
+        system_prompt = (
+            "당신은 금융감독원 DART 전자공시 및 오버행(잠재 매물) 리스크 전문 수석 분석 에이전트입니다.\n"
+            f"주어진 기업({stock_name}, 티커: {ticker}, 소속: {market}, 업종: {sector})에 대해\n"
+            "실제 전환사채(CB)/신주인수권부사채(BW)/유상증자 이력, 잠재 희석률, 대주주 지분 변동, 자사주 매입/소각 및 배당 등 주주환원 정책을 현실적이고 날카롭게 심의하여 리포트를 작성하십시오.\n\n"
+            "작성 가이드라인:\n"
+            f"1. 리포트 본문:\n"
+            f"📑 [{stock_name} ({ticker})] DART 전자공시 & 오버행 리스크 분석 리포트\n"
+            "- 공시 종합 평가: [POSITIVE_HIGH / POSITIVE_MODERATE / NEUTRAL / NEGATIVE_MODERATE / NEGATIVE_HIGH 중 택1]\n"
+            "- 오버행 리스크: [LOW / MEDIUM / HIGH] (CB/BW 잔액 및 잠재 희석률 상태 상세)\n"
+            "- 주주환원 및 지배구조: 배당 성향, 자사주 소각/매입, 책임경영 평가\n"
+            "- 최근 주요 공시 3건 요약 (수주, 투자, 배당 등)\n"
+            "- 핵심 요약 (2~3문장)\n\n"
+            "2. 리포트 맨 마지막에 반드시 아래 JSON 블록을 정확한 수치로 포함하십시오 (JSON 외 다른 글자 없이):\n"
+            "```json\n"
+            "{\n"
+            '  "impact_grade": "POSITIVE_HIGH" | "POSITIVE_MODERATE" | "NEUTRAL" | "NEGATIVE_MODERATE" | "NEGATIVE_HIGH",\n'
+            '  "overhang_risk": "LOW" | "MEDIUM" | "HIGH",\n'
+            '  "dilution_risk": "LOW" | "MEDIUM" | "HIGH",\n'
+            '  "overhang_warning": true | false,\n'
+            '  "cb_bw_status": "<string>",\n'
+            '  "disclosure_count": <int>,\n'
+            '  "latest_filings": [\n'
+            '    {"title": "<공시명>", "date": "YYYY-MM-DD", "category": "<유형>", "impact": "POSITIVE" | "NEUTRAL" | "NEGATIVE"}\n'
+            '  ]\n'
+            "}\n"
+            "```"
         )
 
+        user_prompt = (
+            f"종목명: {stock_name} (종목코드: {ticker}, 시장: {market}, 업종: {sector})\n"
+            f"DB 현재가: {current_price:,.0f}원\n"
+            f"사용자 분석 요청: {raw_text or f'{stock_name} 전자공시 및 오버행 리스크 분석'}"
+        )
+
+        try:
+            resp = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+            report_text = extract_text_from_llm_message(resp.content)
+        except Exception as e:
+            logger.warning("dart_disclosure_agent.llm_fallback", error=str(e))
+            report_text = (
+                f"📑 [{stock_name} ({ticker})] DART 전자공시 & 오버행 리스크 분석 리포트\n"
+                f"- 공시 종합 평가: [{db_dart['impact_grade']}] ({market} 상장사 공시 요건 충족)\n"
+                f"- 오버행 리스크: [{db_dart['overhang_risk']}] ({db_dart['cb_bw_status']})\n"
+                f"- 주주환원 및 지배구조: 지속적인 배당 정책 및 책임경영 추진\n"
+                f"- 핵심 요약: {db_dart['summary']}\n\n"
+                "```json\n"
+                + json.dumps({
+                    "impact_grade": db_dart["impact_grade"],
+                    "overhang_risk": db_dart["overhang_risk"],
+                    "dilution_risk": db_dart["dilution_risk"],
+                    "overhang_warning": db_dart["overhang_warning"],
+                    "cb_bw_status": db_dart["cb_bw_status"],
+                    "disclosure_count": db_dart["disclosure_count"],
+                    "latest_filings": db_dart.get("latest_filings", []),
+                }, ensure_ascii=False, indent=2)
+                + "\n```"
+            )
+
+        # LLM 응답에서 구조화 JSON 추출
+        parsed_json = extract_json_from_llm_response(report_text) or {}
+
+        impact_grade = str(parsed_json.get("impact_grade", db_dart["impact_grade"])).upper()
+        if impact_grade not in ["POSITIVE_HIGH", "POSITIVE_MODERATE", "NEUTRAL", "NEGATIVE_MODERATE", "NEGATIVE_HIGH"]:
+            impact_grade = db_dart["impact_grade"]
+
+        overhang_risk = str(parsed_json.get("overhang_risk", db_dart["overhang_risk"])).upper()
+        if overhang_risk not in ["LOW", "MEDIUM", "HIGH"]:
+            overhang_risk = db_dart["overhang_risk"]
+
+        dilution_risk = str(parsed_json.get("dilution_risk", overhang_risk)).upper()
+        if dilution_risk not in ["LOW", "MEDIUM", "HIGH"]:
+            dilution_risk = overhang_risk
+
+        overhang_warning = bool(parsed_json.get("overhang_warning", overhang_risk != "LOW"))
+        cb_bw_status = str(parsed_json.get("cb_bw_status", db_dart["cb_bw_status"]))
+        count = int(parsed_json.get("disclosure_count", db_dart["disclosure_count"]))
+        filings = parsed_json.get("latest_filings") or db_dart.get("latest_filings", [])
+
+        analysis = {
+            "impact_grade": impact_grade,
+            "overhang_risk": overhang_risk,
+            "dilution_risk": dilution_risk,
+            "overhang_warning": overhang_warning,
+            "cb_bw_status": cb_bw_status,
+            "disclosure_count": count,
+            "latest_filings": filings,
+        }
+
+        # JSON 코드 블록을 제거한 순수 마크다운 리포트
+        clean_report = re.sub(r"```(?:json)?\s*\{[\s\S]*?\}\s*```", "", report_text).strip()
+
         return {
-            "output": report,
-            "messages": [AIMessage(content=report)],
+            "ticker": ticker,
+            "stock_name": stock_name,
+            "current_price": current_price,
+            "disclosure_analysis": analysis,
+            "output": clean_report,
+            "messages": [AIMessage(content=clean_report)],
         }
 
 
 def create_dart_graph():
     builder = StateGraph(DartState)
-    builder.add_node("fetch_dart", FetchDartDisclosuresNode(name="fetch_dart"))
-    builder.add_node("analyze_disclosures", AnalyzeDisclosuresNode(name="analyze_disclosures"))
-    builder.add_node("format_report", FormatDartReportNode(name="format_report"))
+    builder.add_node("analyze_dart_llm", LLMAnalyzeDisclosureNode(name="analyze_dart_llm"))
 
-    builder.add_edge(START, "fetch_dart")
-    builder.add_edge("fetch_dart", "analyze_disclosures")
-    builder.add_edge("analyze_disclosures", "format_report")
-    builder.add_edge("format_report", END)
+    builder.add_edge(START, "analyze_dart_llm")
+    builder.add_edge("analyze_dart_llm", END)
 
     return builder.compile()
 
@@ -117,7 +171,7 @@ def create_app():
     graph = create_dart_graph()
     agent = LangGraphAgent(
         name="dart_disclosure_agent",
-        description="DART 전자공시 실시간 감지, CB/BW 희석률 및 주주환원/오버행 리스크 분석 에이전트",
+        description="LLM 및 PostgreSQL DB 실시간 시세 기반 DART 전자공시 감지, CB/BW 잠재 희석률 및 오버행 리스크 분석 에이전트",
         graph=graph,
     )
     a2a_app = to_a2a(agent)
@@ -126,3 +180,4 @@ def create_app():
 
 
 app = create_app()
+
