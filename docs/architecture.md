@@ -127,6 +127,13 @@ graph TD
   3. **WebSocket Streaming**: `websockets` 라이브러리 기반 비동기 실시간 틱 수신 및 백그라운드 태스크.
   4. **LangGraph Pipeline**: 모든 노드를 `async def process(self, state)`로 구현하여 `ainvoke()` 및 `astream()` 비동기 스트리밍 완벽 지원.
 
+### 3.8. 다계층 동적 티커 식별 & 자동 적재 (Multi-Tier Stock Resolution Pipeline)
+- **미등록/신규 상장사 동적 대응**: 하드코딩된 사전이나 DB에 없는 KOSPI/KOSDAQ 기업 검색 시에도 기본값(삼성전자)으로 임의 대체되지 않고 정확한 상장 종목을 동적으로 식별합니다.
+  1. **Tier 1 (정규식/인메모리)**: 6자리 숫자 티커 및 주요 상장사(`STOCK_MASTER`) 사전 매칭.
+  2. **Tier 2 (PostgreSQL DB)**: `stock_master_info` 테이블에서 `name ILIKE`, `ticker ILIKE`, 별칭 매칭.
+  3. **Tier 3 (LLM KRX 추론 & Auto-Onboarding)**: DB 미적재 종목 질의 시 LLM 기반으로 한국거래소(KRX) 상장 종목코드(티커), 공식 사명, 시장 구분(KOSPI/KOSDAQ)을 동적 추론하고 `stock_master_info`, `stock_watchlist`, Redis에 자동 등록.
+  4. **Tier 4 (종목 미식별 안내)**: 상장사가 아닌 일반 질의나 오타 입력 시 삼성전자 기본값으로 대체하지 않고 정확한 재검색 가이드 제공.
+
 ---
 
 ## 4. 네트워크 및 포트 배치표

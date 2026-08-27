@@ -100,12 +100,23 @@ graph TD
 
 ## 4. 핵심 컴포넌트 구현 명세
 
-### 4.1. `planner.py` (실행 계획 수립)
+### 4.1. `planner.py` (실행 계획 수립 & 다계층 동적 티커 식별)
 
-사용자 질문을 분석하여 실행할 서브 에이전트 목록과 의존 관계(단계별 그룹)를 Pydantic 구조체로 생성합니다.
+사용자 질문을 분석하여 코스피/코스닥 상장 종목을 동적으로 식별하고, 실행할 서브 에이전트 목록과 의존 관계(단계별 DAG)를 Pydantic 구조체로 생성합니다.
+
+```mermaid
+flowchart TD
+    UserQuery["👤 사용자 질의 (예: '삼양식품 분석해줘')"] --> Tier1{"Tier 1: 6자리 숫자/STOCK_MASTER 매칭"}
+    Tier1 -- "일치" --> PlanGen["ExecutionPlan DAG 생성"]
+    Tier1 -- "불일치" --> Tier2{"Tier 2: PostgreSQL stock_master_info DB 비동기 조회"}
+    Tier2 -- "일치" --> PlanGen
+    Tier2 -- "불일치" --> Tier3{"Tier 3: LLM 기반 KRX(KOSPI/KOSDAQ) 상장사 동적 추론"}
+    Tier3 -- "식별 성공" --> AutoOnboard["DB stock_master_info & Watchlist 자동 등록(Auto-onboard)"] --> PlanGen
+    Tier3 -- "식별 실패" --> Tier4["UNKNOWN_STOCK 예외 처리 (삼성전자 기본값 대체 방지)"]
+```
 
 ```python
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 class PlanStep(BaseModel):
@@ -114,9 +125,10 @@ class PlanStep(BaseModel):
     task_prompt: str = Field(description="서브 에이전트에 전달할 세부 지시문")
 
 class ExecutionPlan(BaseModel):
-    ticker: str = Field(description="대상 주식 종목 코드 (e.g. 005930)")
-    query_intent: str = Field(description="사용자 질의 의도: NEWS_ONLY, CHART_ONLY, FULL_ANALYSIS 등")
-    steps: List[PlanStep] = Field(description="실행할 단계별 서브 에이전트 목록")
+    ticker: str = Field(default="", description="대상 주식 종목 코드 (e.g. 003230)")
+    stock_name: Optional[str] = Field(default=None, description="대상 주식 종목명 (e.g. 삼양식품)")
+    query_intent: str = Field(default="FULL_ANALYSIS", description="사용자 질의 의도: NEWS_ONLY, CHART_ONLY, FULL_ANALYSIS, UNKNOWN_STOCK 등")
+    steps: List[PlanStep] = Field(default_factory=list, description="실행할 단계별 서브 에이전트 목록 (DAG)")
 ```
 
 ### 4.2. `dispatcher.py` (비동기 병렬 호출기)
